@@ -53,6 +53,21 @@ netfilter 重定向（`iptables -j REDIRECT` / DNAT）的连接**原本要访问
 
 ## 使用
 
+### 直接拉取已发布的镜像
+
+CI 会把镜像推送到 GitHub Container Registry，通常无需本地构建：
+
+```bash
+docker pull --platform linux/arm/v7 \
+    ghcr.io/forstnova-arknights/docker-easyconnect-32:cli-armhf
+```
+
+镜像只有 `linux/arm/v7` 一个平台，在 x86-64 机器上拉取**必须**显式带上
+`--platform linux/arm/v7`，否则 Docker 会报
+`no matching manifest for linux/amd64 in the manifest list entries`。
+
+### 本地构建
+
 镜像可以直接构建：
 
 ```bash
@@ -87,6 +102,37 @@ EasyConnect 的三个 deb 包合计约 137 MB。构建时它们在 **`payload` �
 
 `payload` 阶段还固定使用 `$BUILDPLATFORM`，让 `dpkg -x` 在构建机架构上原生运行
 而不是在模拟下运行（解包 amd64 的 deb 与架构无关），构建因此快了很多。
+
+### 为什么不再依赖 `hagb/docker-easyconnect:build`
+
+上游的 `Dockerfile.cli` 用
+
+```dockerfile
+COPY --from=hagb/docker-easyconnect:build /results/fake-hwaddr/ /results/tinyproxy-ws/ /
+```
+
+取两个辅助产物。这个镜像只存在于构建过它的机器上（Docker Hub 上没有公开的
+`build` tag），所以照搬上游写法时流水线必然失败：
+
+```
+docker.io/hagb/docker-easyconnect:build: not found
+```
+
+自己构建它也走不通：上游的 `Dockerfile.build` 在 `EC_HOST=amd64` 时会安装
+`crossbuild-essential-amd64`，而 Debian **没有为 armhf 构建
+`gcc-x86-64-linux-gnu`**，该包因此不可安装。上游 CI 的 `archs` 列表里也没有
+armhf（只有 mips64le/arm64/i386/amd64），armhf 的 `build` tag 是手工推上去的。
+
+所以本分支直接在 `Dockerfile.cli-armhf` 里构建这两个产物：
+
+* `fake-hwaddr.so` 会被 `LD_PRELOAD` 进 EasyConnect 二进制，而那些二进制是
+  amd64、跑在模拟器里，所以它**必须**是 x86-64 对象——因此在
+  `linux/$EC_HOST` 平台上**原生编译**，而不是交叉编译；
+* `tinyproxy` 在镜像里原生运行，所以按目标架构编译（arm/v7 下要跑几分钟，
+  CI 里靠 BuildKit 缓存摊薄）。
+
+这样 Dockerfile 就是自包含的：从干净的 checkout 出发、只需要 `local-deps/` 里的
+deb 包就能构建，不依赖任何预置镜像。
 
 ### QEMU 架构选项
 

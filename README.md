@@ -21,6 +21,16 @@
 正确转发 `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)`——上游 QEMU 会把这个
 选项直接以 `-ENOPROTOOPT` 拒绝，从而破坏 EasyConnect 的透明代理场景。
 
+CI 会把镜像推送到 GitHub Container Registry，也可以直接拉取（注意只有
+`linux/arm/v7` 一个平台，在 x86-64 机器上需要显式指定）：
+
+```bash
+docker pull --platform linux/arm/v7 \
+    ghcr.io/forstnova-arknights/docker-easyconnect-32:cli-armhf
+```
+
+自己构建：
+
 ```bash
 cd local-deps && ./fetch.sh && cd ..          # 抓取 EasyConnect 的 deb 包
 docker buildx build --platform linux/arm/v7 \
@@ -30,6 +40,8 @@ docker buildx build --platform linux/arm/v7 \
 编译好的 armhf 二进制已随仓库提供（`qemu-user/qemu-x86_64-armhf`），无需自行编译
 QEMU；若要自己编译，或想换成别的宿主/目标架构组合，见
 [`qemu-user/build.sh`](qemu-user/build.sh)（`./build.sh [HOST_ARCH] [TARGET_ARCH]`）。
+云端流水线见
+[`.github/workflows/build-armhf-cli-image.yml`](.github/workflows/build-armhf-cli-image.yml)。
 
 详见 [doc/armhf.md](doc/armhf.md)。
 
