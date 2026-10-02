@@ -62,10 +62,31 @@ echo "== building qemu-${TARGET_ARCH} for ${HOST_ARCH} (native: $NATIVE) =="
 # Set SKIP_DEPS=1 to use a toolchain that is already installed.
 if [ -z "${SKIP_DEPS:-}" ] && [ "$(id -u)" -eq 0 ]; then
     echo "== installing build dependencies =="
+    apt_opts=""
     if [ "$NATIVE" = no ]; then
         dpkg --add-architecture "$DEB_ARCH"
+        # Ubuntu keeps non-x86 architectures in the "ports" archive, and
+        # security.ubuntu.com carries none of them, so a plain apt-get update
+        # after dpkg --add-architecture 404s on every $DEB_ARCH index and the
+        # whole build aborts.  Hand apt a private sources list for this run
+        # instead of rewriting the system one.
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        if [ "${ID:-}" = ubuntu ]; then
+            codename=${VERSION_CODENAME:-jammy}
+            sl="${TMPDIR:-/tmp}/qemu-crossbuild-sources.list"
+            : > "$sl"
+            for c in main universe; do
+                printf 'deb [arch=%s] http://archive.ubuntu.com/ubuntu %s %s\n' "$BUILD_ARCH" "$codename" "$c" >> "$sl"
+                printf 'deb [arch=%s] http://archive.ubuntu.com/ubuntu %s-updates %s\n' "$BUILD_ARCH" "$codename" "$c" >> "$sl"
+                printf 'deb [arch=%s] http://security.ubuntu.com/ubuntu %s-security %s\n' "$BUILD_ARCH" "$codename" "$c" >> "$sl"
+                printf 'deb [arch=%s] http://ports.ubuntu.com/ubuntu-ports %s %s\n' "$DEB_ARCH" "$codename" "$c" >> "$sl"
+                printf 'deb [arch=%s] http://ports.ubuntu.com/ubuntu-ports %s-updates %s\n' "$DEB_ARCH" "$codename" "$c" >> "$sl"
+                printf 'deb [arch=%s] http://ports.ubuntu.com/ubuntu-ports %s-security %s\n' "$DEB_ARCH" "$codename" "$c" >> "$sl"
+            done
+            apt_opts="-o Dir::Etc::sourcelist=$sl -o Dir::Etc::sourceparts=/dev/null"
+        fi
     fi
-    apt-get update
     pkgs="pkg-config xz-utils curl ca-certificates python3-pip python3-venv ninja-build"
     if [ "$NATIVE" = no ]; then
         pkgs="$pkgs gcc-$TRIPLET libc6-dev:$DEB_ARCH libglib2.0-dev:$DEB_ARCH"
@@ -73,7 +94,9 @@ if [ -z "${SKIP_DEPS:-}" ] && [ "$(id -u)" -eq 0 ]; then
         pkgs="$pkgs gcc libc6-dev libglib2.0-dev"
     fi
     # shellcheck disable=SC2086
-    apt-get install -y --no-install-recommends $pkgs
+    apt-get $apt_opts update
+    # shellcheck disable=SC2086
+    apt-get $apt_opts install -y --no-install-recommends $pkgs
     # QEMU's configure insists on a recent meson; the distro one is often too old.
     python3 -m pip install --break-system-packages meson tomli 2>/dev/null ||
         python3 -m pip install meson tomli
