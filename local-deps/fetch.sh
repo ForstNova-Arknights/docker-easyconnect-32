@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Fetch the EasyConnect deb packages that Dockerfile.cli-armhf needs.
+# Fetch the EasyConnect deb packages that Dockerfile.cli needs.
 # They are Sangfor's property and are deliberately not kept in this repository.
 #
 #   ./fetch.sh

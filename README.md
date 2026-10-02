@@ -10,40 +10,51 @@
 
 详细用法见于 [doc/usage.md](doc/usage.md)，常见问题见于 [doc/faq.md](doc/faq.md)，自行构建可参照构建说明 [doc/build.md](doc/build.md)。
 
-## 32 位（armhf）平台
+## 多架构 CLI 镜像（含 32 位平台）
 
-本分支额外支持在 **32 位 ARM（armhf / `linux/arm/v7`）** 上构建纯命令行版镜像。
+本分支为**每个架构**都构建一份纯命令行版（`cli`）镜像：`amd64`、`i386`、`arm64`、
+`armhf`、`armel`、`ppc64le`、`riscv64`、`s390x`、`mips64le`。
 
-上游依赖发行版 `qemu-user` 来模拟 amd64 的 EasyConnect 二进制，这条路在 armhf
-上已经走不通：QEMU 自 10.0 起禁止 32 位宿主模拟 64 位 guest（11.x 更是移除了
-32 位宿主），Debian trixie 的 armhf `qemu-user` 也不再提供 `qemu-x86_64`。
-因此本分支改为交叉编译一个**打过补丁**的静态 `qemu-x86_64` 打进镜像，使其能够
-正确转发 `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)`——上游 QEMU 会把这个
-选项直接以 `-ENOPROTOOPT` 拒绝，从而破坏 EasyConnect 的透明代理场景。
+上游的 `cli` 镜像只在 amd64 下构建。原因是 CLI 的二进制来自
+[shmilee 的命令行版 deb 包](https://github.com/shmilee/scripts/releases/download/v0.0.1/easyconn_7.6.8.2-ubuntu_amd64.deb)，
+**无论镜像架构是什么它们都是 amd64**（7.6.3 / 7.6.7 的 deb 只贡献 `conf`），所以在
+其它架构上必须跑在 `qemu-user` 里。而发行版的 `qemu-user` 在这里行不通：
 
-CI 会把镜像推送到 GitHub Container Registry，也可以直接拉取（注意只有
-`linux/arm/v7` 一个平台，在 x86-64 机器上需要显式指定）：
+* QEMU 自 10.0 起禁止 32 位宿主模拟 64 位 guest（11.x 更是移除了 32 位宿主），
+  Debian trixie 的 armhf/armel/i386 `qemu-user` 因此不再提供 `qemu-x86_64`；
+* 即使在 64 位宿主上，发行版的模拟器也会把
+  `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)` 直接以 `-ENOPROTOOPT` 拒绝，
+  到不了宿主内核，从而破坏 EasyConnect 的透明代理场景。
+
+因此本分支改为用 QEMU 9.2.3 源码加一个 79 行的补丁，**为每个宿主架构交叉编译一份
+静态 `qemu-x86_64`** 打进对应镜像（`qemu-user/qemu-x86_64-<架构>`，已随仓库提供）。
+
+CI 会把各架构镜像推送到 GitHub Container Registry，也可以直接拉取：
 
 ```bash
+docker pull ghcr.io/forstnova-arknights/docker-easyconnect-32:cli       # 多架构 manifest
 docker pull --platform linux/arm/v7 \
-    ghcr.io/forstnova-arknights/docker-easyconnect-32:cli-armhf
+    ghcr.io/forstnova-arknights/docker-easyconnect-32:cli-armhf         # 指定架构
 ```
 
-自己构建：
+在 x86-64 机器上拉取非本机架构的镜像必须显式带 `--platform`，否则会报
+`no matching manifest for linux/amd64`。
+
+自己构建（以 armhf 为例）：
 
 ```bash
 cd local-deps && ./fetch.sh && cd ..          # 抓取 EasyConnect 的 deb 包
 docker buildx build --platform linux/arm/v7 \
-    -f Dockerfile.cli-armhf -t docker-easyconnect:cli-armhf .
+    -f Dockerfile.cli -t docker-easyconnect:cli-armhf .
 ```
 
-编译好的 armhf 二进制已随仓库提供（`qemu-user/qemu-x86_64-armhf`），无需自行编译
-QEMU；若要自己编译，或想换成别的宿主/目标架构组合，见
-[`qemu-user/build.sh`](qemu-user/build.sh)（`./build.sh [HOST_ARCH] [TARGET_ARCH]`）。
+`Dockerfile.cli` 会自己从 `--platform` 推导镜像架构，不需要额外传参；amd64 下它
+不安装模拟器，二进制原生运行。若要自己编译模拟器，或想换成别的宿主/目标架构组合，
+见 [`qemu-user/build.sh`](qemu-user/build.sh)（`./build.sh [HOST_ARCH] [TARGET_ARCH]`）。
 云端流水线见
-[`.github/workflows/build-armhf-cli-image.yml`](.github/workflows/build-armhf-cli-image.yml)。
+[`.github/workflows/build-cli-images.yml`](.github/workflows/build-cli-images.yml)。
 
-详见 [doc/armhf.md](doc/armhf.md)。
+详见 [doc/cli-images.md](doc/cli-images.md)。
 
 ## 简明使用步骤
 

@@ -1,0 +1,263 @@
+name: Build CLI images
+
+# Cross-compiles the patched qemu-user emulators, proves that they forward
+# getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...), and publishes one CLI image per
+# architecture to GitHub Container Registry.
+#
+# Why one emulator per architecture: the CLI binaries come from
+# easyconn_7.6.8.2-ubuntu_amd64.deb and are amd64 no matter which image they end
+# up in, so every other architecture runs them under qemu-user.  Upstream only
+# publishes this image for amd64, where no emulation is needed.
+#
+# Published tags:
+#   ghcr.io/<owner>/<repo>:cli-<host>   one per architecture, e.g. :cli-armhf
+#   ghcr.io/<owner>/<repo>:cli          multi-architecture manifest of all
+#   ghcr.io/<owner>/<repo>:sha-<commit>-<host>
+#   ghcr.io/<owner>/<repo>:<tag>-<host> on tag pushes
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      rebuild_emulator:
+        description: Rebuild the emulators from source instead of using the committed binaries
+        type: boolean
+        default: false
+      push:
+        description: Push the images to GHCR
+        type: boolean
+        default: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  QEMU_TARGET_ARCH: x86_64
+  EC_HOST: amd64
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Cross-compile one emulator per architecture that needs one.  Runs on demand
+  # (workflow_dispatch with rebuild_emulator) or for tags; otherwise the
+  # binaries committed under qemu-user/ are used.
+  #
+  # Debian rather than Ubuntu: Ubuntu dropped armel and mips64el, and keeps the
+  # rest of these architectures in a separate ports archive, while Debian serves
+  # every architecture from one archive.  node:20-bookworm is used instead of
+  # plain debian:bookworm because actions/checkout needs git.
+  # ---------------------------------------------------------------------------
+  emulator:
+    name: Cross-compile qemu-user (${{ matrix.host }})
+    if: ${{ github.event.inputs.rebuild_emulator == 'true' || startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-22.04
+    container: node:20-bookworm
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [i386, arm64, armhf, armel, ppc64el, riscv64, s390x, mips64el]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: ./qemu-user/build.sh "${{ matrix.host }}" "$QEMU_TARGET_ARCH"
+
+      - name: Report the result
+        run: |
+          file="qemu-user/qemu-$QEMU_TARGET_ARCH-${{ matrix.host }}"
+          ls -l "$file"
+          file "$file"
+          sha256sum "$file"
+
+      - name: Upload the emulator
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-${{ env.QEMU_TARGET_ARCH }}-${{ matrix.host }}
+          path: qemu-user/qemu-${{ env.QEMU_TARGET_ARCH }}-${{ matrix.host }}
+          if-no-files-found: error
+
+      - name: Attach the emulator to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          file="qemu-user/qemu-$QEMU_TARGET_ARCH-${{ matrix.host }}"
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "$file" --clobber
+
+  # ---------------------------------------------------------------------------
+  # Prove that the emulator forwards SO_ORIGINAL_DST instead of answering
+  # ENOPROTOOPT.  The distribution's qemu-arm has the same unpatched
+  # do_getsockopt() as upstream QEMU, so a *patched* native qemu-arm has to be
+  # built as well: it is the outer emulator that runs the armhf binary on an
+  # x86-64 runner, and an unpatched one would mask the fix.
+  #
+  # armhf is the case verified end to end here.  The patch lives in
+  # architecture-independent linux-user/ code, so the other architectures reuse
+  # the same source; their emulators are smoke tested in the image job below.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify SO_ORIGINAL_DST forwarding
+    needs: [emulator]
+    if: ${{ always() && !cancelled() && needs.emulator.result != 'failure' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the freshly built emulator
+        if: ${{ needs.emulator.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qemu-${{ env.QEMU_TARGET_ARCH }}-*
+          path: qemu-user
+          merge-multiple: true
+
+      - name: Install the test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iptables iproute2 qemu-user-static
+
+      # Two patched emulators are needed here: qemu-arm is the outer emulator
+      # that runs the armhf binary on an x86-64 runner, and qemu-x86_64 drives
+      # case 2.  Both share one build tree, so the QEMU tarball is only
+      # downloaded once.
+      - name: Build patched native emulators
+        run: |
+          sudo ./qemu-user/build.sh amd64 arm
+          sudo ./qemu-user/build.sh amd64 x86_64
+
+      - name: Run the verification
+        run: |
+          mkdir -p /tmp/native
+          cp qemu-user/qemu-arm-amd64 /tmp/native/qemu-arm
+          cp qemu-user/qemu-x86_64-amd64 /tmp/native/qemu-x86_64
+          sudo env NATIVE_DIR=/tmp/native \
+               ARMHF_QEMU="$PWD/qemu-user/qemu-$QEMU_TARGET_ARCH-armhf" \
+               ./qemu-user/test/run_verify.sh
+
+  # ---------------------------------------------------------------------------
+  # Build and publish one image per architecture.
+  # ---------------------------------------------------------------------------
+  image:
+    name: Build image (${{ matrix.host }})
+    needs: [emulator]
+    if: ${{ always() && !cancelled() && needs.emulator.result != 'failure' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: amd64,   platform: linux/amd64,   native: true }
+          - { host: i386,    platform: linux/386 }
+          - { host: arm64,   platform: linux/arm64 }
+          - { host: armhf,   platform: linux/arm/v7 }
+          - { host: armel,   platform: linux/arm/v6 }
+          - { host: ppc64el, platform: linux/ppc64le }
+          - { host: riscv64, platform: linux/riscv64 }
+          - { host: s390x,   platform: linux/s390x }
+          - { host: mips64el, platform: linux/mips64le }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the freshly built emulators
+        if: ${{ needs.emulator.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qemu-${{ env.QEMU_TARGET_ARCH }}-*
+          path: qemu-user
+          merge-multiple: true
+
+      - name: Fetch the EasyConnect packages
+        env:
+          GH_PROXY: ''
+        run: ./local-deps/fetch.sh
+
+      - name: Set up QEMU (to run ${{ matrix.platform }} containers)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name != 'pull_request' && (github.event.inputs.push != 'false') }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            suffix=-${{ matrix.host }},onlatest=true
+          tags: |
+            type=raw,value=cli,priority=1000
+            type=ref,event=tag
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cli
+          platforms: ${{ matrix.platform }}
+          push: ${{ github.event_name != 'pull_request' && github.event.inputs.push != 'false' }}
+          load: ${{ github.event_name == 'pull_request' || github.event.inputs.push == 'false' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.host }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.host }}
+
+      # Smoke test: the emulator has to at least execute an amd64 binary inside
+      # its own image.  (A getsockopt check would be answered by the runner's
+      # *unpatched* binfmt emulator, which is the outer emulator here, so it
+      # would report ENOPROTOOPT for every architecture.)
+      - name: Smoke test the emulator
+        if: ${{ matrix.native != true }}
+        run: |
+          docker run --rm --platform "${{ matrix.platform }}" \
+            --entrypoint /usr/bin/qemu-${{ env.QEMU_TARGET_ARCH }} \
+            "${{ env.IMAGE }}:cli-${{ matrix.host }}" --version
+
+  # ---------------------------------------------------------------------------
+  # Combine the per-architecture images into a single :cli manifest.
+  # ---------------------------------------------------------------------------
+  manifest:
+    name: Publish the multi-architecture manifest
+    needs: [image]
+    if: ${{ always() && !cancelled() && needs.image.result == 'success' &&
+            github.event_name != 'pull_request' && github.event.inputs.push != 'false' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create :cli from the per-architecture images
+        run: |
+          set -eux
+          sources=
+          for host in amd64 i386 arm64 armhf armel ppc64el riscv64 s390x mips64el; do
+            sources="$sources $IMAGE:cli-$host"
+          done
+          # shellcheck disable=SC2086
+          docker buildx imagetools create -t "$IMAGE:cli" $sources
+          docker buildx imagetools inspect "$IMAGE:cli"

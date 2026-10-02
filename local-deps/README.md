@@ -1,6 +1,6 @@
 # local-deps
 
-`Dockerfile.cli-armhf` takes the EasyConnect packages from this directory so the
+`Dockerfile.cli` takes the EasyConnect packages from this directory so the
 (emulated, therefore slow) image build does not depend on flaky downloads.
 
 The packages are **not** part of this repository — they are Sangfor's property

@@ -1,59 +1,260 @@
+# Dockerfile.cli -- the command line (no VNC) image, for every architecture.
+#
+# Upstream builds this file for amd64 only, because the CLI binaries come from
+# shmilee's easyconn_7.6.8.2-ubuntu_amd64.deb and are amd64 whatever the image
+# architecture is.  The 7.6.3/7.6.7 debs only contribute their conf directory,
+# so on any other architecture those amd64 binaries have to run under qemu-user.
+#
+# The distribution's qemu-user cannot do that here:
+#
+#   * QEMU 10.0 forbids a 32-bit host emulating a 64-bit guest and QEMU 11
+#     dropped 32-bit hosts altogether, so armhf/armel/i386 have no qemu-x86_64
+#     at all -- Debian trixie's armhf qemu-user does not ship one;
+#   * and on every host the stock emulator answers
+#     getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...) with -ENOPROTOOPT instead of
+#     forwarding it, which is what EasyConnect uses to learn the original
+#     destination of a redirected connection.
+#
+# So this image carries its own static qemu-user, built from QEMU 9.2.3 with
+# qemu-user/qemu-9.2.3-so_original_dst.patch, one binary per host architecture:
+#
+#     qemu-user/qemu-x86_64-<host>      e.g. qemu-x86_64-armhf
+#
+# Build (the host architecture is derived from --platform, so nothing has to be
+# kept in sync by hand):
+#
+#     docker buildx build --platform linux/arm/v7 -f Dockerfile.cli \
+#         -t docker-easyconnect:cli-armhf .
+#
+# Supported hosts: amd64, i386, arm64, armhf, armel, ppc64le, riscv64, s390x.
+# On amd64 no emulator is needed and none is installed.
+#
+# See doc/armhf.md for how the emulators are built and verified.
+
+# Used by the hwaddr stage below, which must select its platform from it.
+ARG EC_HOST=amd64
+
+# Declared before the first FROM so every stage can share them.  Plain http on
+# purpose: debian:bookworm-slim carries no CA certificates yet, so an https apt
+# source cannot be verified until ca-certificates is installed.
+ARG MIRROR_URL=http://mirrors.aliyun.com/debian/ \
+    SECURITY_URL=http://mirrors.aliyun.com/debian-security/
+
+# =============================================================================
+# Stage "payload" -- unpack the EasyConnect packages.
+#
+# This stage exists purely to keep the ~140 MB of debs out of the final image.
+# COPYing them into the image and deleting them in a later RUN does not help:
+# the layer holding them stays in the image, which used to cost 137 MB.
+#
+# It is pinned to $BUILDPLATFORM so dpkg runs natively rather than under
+# emulation -- the packages are amd64 and unpacking is architecture independent.
+# =============================================================================
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS payload
+
+COPY ["./local-deps/", "/tmp/local-deps/"]
+
+RUN set -eux; \
+    ec_dir=/usr/share/sangfor/EasyConnect/resources; \
+    mkdir -p "/out${ec_dir}/bin" "/out${ec_dir}/lib64" \
+             "/out${ec_dir}/shell" "/out${ec_dir}/logs"; \
+    mkdir -p /tmp/work; cd /tmp/work; \
+    dpkg -x /tmp/local-deps/easyconn_7.6.8.2-ubuntu_amd64.deb easyconn; \
+    cp "easyconn${ec_dir}/bin/CSClient" \
+       "easyconn${ec_dir}/bin/easyconn" \
+       "easyconn${ec_dir}/bin/ECAgent" \
+       "easyconn${ec_dir}/bin/svpnservice" \
+       "easyconn${ec_dir}/bin/ca.crt" \
+       "easyconn${ec_dir}/bin/cert.crt" \
+       "/out${ec_dir}/bin/"; \
+    cp "easyconn${ec_dir}/lib64/libnspr4.so" \
+       "easyconn${ec_dir}/lib64/libnss3.so" \
+       "easyconn${ec_dir}/lib64/libnssutil3.so" \
+       "easyconn${ec_dir}/lib64/libplc4.so" \
+       "easyconn${ec_dir}/lib64/libplds4.so" \
+       "easyconn${ec_dir}/lib64/libsmime3.so" \
+       "/out${ec_dir}/lib64/"; \
+    cp "easyconn${ec_dir}/shell/"* "/out${ec_dir}/shell/"; \
+    chmod +x "/out${ec_dir}/shell/"*; \
+    cp -r "easyconn${ec_dir}/conf" "/out${ec_dir}/conf_7.6.8"; \
+    rm -rf easyconn; \
+    for ver in 7.6.3 7.6.7; do \
+        case "$ver" in \
+            7.6.3) ec_deb=/tmp/local-deps/EasyConnect_x64.deb ;; \
+            7.6.7) ec_deb=/tmp/local-deps/EasyConnect_x64_7_6_7_3.deb ;; \
+        esac; \
+        dpkg -x "$ec_deb" ec; \
+        cp -r "ec${ec_dir}/conf" "/out${ec_dir}/conf_${ver}"; \
+        rm -rf ec; \
+    done; \
+    chmod +xs "/out${ec_dir}/bin/CSClient" \
+              "/out${ec_dir}/bin/ECAgent" \
+              "/out${ec_dir}/bin/svpnservice"
+
+# =============================================================================
+# Stage "emulator" -- pick the qemu-user binary for this image's architecture.
+#
+# The host architecture is derived from the automatic TARGETARCH/TARGETVARIANT
+# build arguments rather than passed in, so it cannot drift out of sync with
+# --platform.  When it equals EC_HOST the binaries run natively and the stage
+# deliberately produces an empty /out.
+#
+# This stage runs on $BUILDPLATFORM: it only copies files, so there is no reason
+# to pay for emulation.
+# =============================================================================
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS emulator
+
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG EC_HOST=amd64
+ARG QEMU_TARGET_ARCH=x86_64
+
+COPY ./qemu-user/ /qemu-user/
+
+RUN set -eux; \
+    mkdir -p /out; \
+    case "${TARGETARCH}/${TARGETVARIANT}" in \
+        amd64/)   host=amd64   ;; \
+        386/)     host=i386    ;; \
+        arm64/)   host=arm64   ;; \
+        arm/v7)   host=armhf   ;; \
+        arm/v6)   host=armel   ;; \
+        arm/)     host=armhf   ;; \
+        ppc64le/) host=ppc64el ;; \
+        riscv64/) host=riscv64 ;; \
+        s390x/)   host=s390x   ;; \
+        mips64le/) host=mips64el ;; \
+        *) echo "Dockerfile.cli: unsupported platform ${TARGETARCH}/${TARGETVARIANT}" >&2; exit 1 ;; \
+    esac; \
+    echo "image architecture: ${host} (EasyConnect binaries: ${EC_HOST})"; \
+    if [ "$host" = "$EC_HOST" ]; then \
+        echo "native execution, no emulator needed"; \
+        exit 0; \
+    fi; \
+    src="/qemu-user/qemu-${QEMU_TARGET_ARCH}-${host}"; \
+    if [ ! -f "$src" ]; then \
+        echo "error: no prebuilt emulator at qemu-user/qemu-${QEMU_TARGET_ARCH}-${host}" >&2; \
+        echo "       build one with: ./qemu-user/build.sh ${host} ${QEMU_TARGET_ARCH}" >&2; \
+        exit 1; \
+    fi; \
+    cp "$src" "/out/qemu-${QEMU_TARGET_ARCH}"; \
+    chmod 0755 "/out/qemu-${QEMU_TARGET_ARCH}"
+
+# =============================================================================
+# Stage "hwaddr" -- build fake-hwaddr.so.
+#
+# It is LD_PRELOADed into the EasyConnect binaries, which are amd64 and run
+# under the emulator, so the object must be amd64 no matter which architecture
+# the image is for.  Upstream cross-compiles it in Dockerfile.build with
+# crossbuild-essential-amd64; that package cannot be installed on armhf, so
+# build it natively on the platform EC_HOST names instead.
+# =============================================================================
+FROM --platform=linux/${EC_HOST} debian:bookworm-slim AS hwaddr
+
+ARG MIRROR_URL
+ARG SECURITY_URL
+
+RUN rm -f /etc/apt/sources.list && rm -rf /etc/apt/sources.list.d/* && \
+    printf 'deb %s bookworm main\ndeb %s bookworm-updates main\ndeb %s bookworm-security main\n' \
+        "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        build-essential ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY ./fake-hwaddr /src/fake-hwaddr/
+
+RUN cd /src/fake-hwaddr && make clean all && \
+    install -D fake-hwaddr.so /out/usr/local/lib/fake-hwaddr.so
+
+# =============================================================================
+# Stage "tinyproxy" -- the websocket-capable tinyproxy.
+#
+# Unlike fake-hwaddr.so this one runs natively in the image, so it is built for
+# the target architecture (under emulation).
+# =============================================================================
+FROM debian:bookworm-slim AS tinyproxy
+
+# https://github.com/tinyproxy/tinyproxy/pull/211#issue-382736027
+ARG TINYPROXY_COMMIT=991e47d8ebd4b12710828b2b486535e4c25ba26c
+ARG MIRROR_URL
+ARG SECURITY_URL
+
+RUN rm -f /etc/apt/sources.list && rm -rf /etc/apt/sources.list.d/* && \
+    printf 'deb %s bookworm main\ndeb %s bookworm-updates main\ndeb %s bookworm-security main\n' \
+        "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        build-essential automake libssl-dev ca-certificates wget busybox && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    cd /tmp; \
+    wget -q "https://github.com/tinyproxy/tinyproxy/archive/${TINYPROXY_COMMIT}.zip" -O tinyproxy.zip; \
+    busybox unzip -q tinyproxy.zip; \
+    mv "tinyproxy-${TINYPROXY_COMMIT}" tinyproxy; \
+    cd tinyproxy; \
+    ./autogen.sh --prefix=/usr; \
+    make -j"$(nproc 2>/dev/null || echo 2)"; \
+    install -D src/tinyproxy /out/usr/bin/tinyproxy
+
+# =============================================================================
+# The image itself.
+# =============================================================================
 FROM debian:bookworm-slim
 
-ARG ANDROID_PATCH BUILD_ENV=local MIRROR_URL=http://ftp.cn.debian.org/debian/ EC_HOST http_proxy https_proxy
+ARG BUILD_ENV=local \
+    MIRROR_URL \
+    SECURITY_URL \
+    EC_HOST \
+    QEMU_TARGET_ARCH=x86_64 \
+    http_proxy https_proxy
 
-COPY ["./build-scripts/config-apt.sh", "./build-scripts/get-echost-names.sh",  "./build-scripts/add-qemu.sh", \
+COPY ["./build-scripts/get-echost-names.sh", "./build-scripts/mk-qemu-wrapper.sh", \
       "/tmp/build-scripts/"]
 
-RUN . /tmp/build-scripts/config-apt.sh && \
-    . /tmp/build-scripts/get-echost-names.sh && \
-    . /tmp/build-scripts/add-qemu.sh && \
-    apt-get update && \
+# The patched emulator, or nothing at all when the image runs natively.
+COPY --from=emulator /out/ /usr/bin/
+
+# The EasyConnect payload, unpacked in the "payload" stage.
+COPY --from=payload /out/ /
+
+# fake-hwaddr.so (amd64, preloaded into the emulated binaries) and the
+# websocket-capable tinyproxy (native), replacing upstream's helper image.
+COPY --from=hwaddr /out/ /
+COPY --from=tinyproxy /out/ /
+
+RUN set -eux; \
+    . /tmp/build-scripts/get-echost-names.sh; \
+    printf 'deb %s bookworm main\ndeb %s bookworm-updates main\ndeb %s bookworm-security main\n' \
+        "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list; \
+    rm -f /etc/apt/sources.list.d/*; \
+    if is_echost_foreign; then dpkg --add-architecture "${EC_HOST}"; fi; \
+    foreign_libs=; \
+    if is_echost_foreign; then foreign_libs="libc6:${EC_HOST} libstdc++6:${EC_HOST}"; fi; \
+    apt-get update; \
     apt-get install -y --no-install-recommends --no-install-suggests iptables \
-        dante-server busybox iproute2 tinyproxy-bin ca-certificates ${qemu_pkgs} socat wget && \
-    for command in ps kill killall; do ln -s "$(which busybox)" /usr/local/bin/"${command}" || exit 1 ; done && \
+        dante-server busybox iproute2 tinyproxy-bin ca-certificates \
+        socat wget ${foreign_libs}; \
+    for command in ps kill killall; do \
+        ln -s "$(which busybox)" /usr/local/bin/"${command}" || exit 1; \
+    done; \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r socks && useradd -r -g socks socks
 
-ARG EC_CLI_URL="https://github.com/shmilee/scripts/releases/download/v0.0.1/easyconn_7.6.8.2-ubuntu_amd64.deb"
-COPY ./build-scripts/mk-qemu-wrapper.sh /tmp/build-scripts/
-
-RUN EC_DIR=/usr/share/sangfor/EasyConnect/resources && cd /tmp && \
-    wget "${EC_CLI_URL}" -O easyconn.deb && \
-    dpkg -x easyconn.deb easyconn && \
-    bash -c "mkdir -p ${EC_DIR}/{bin,lib64,shell,logs}/" && \
-    bash -c "cp easyconn/${EC_DIR}/bin/{CSClient,easyconn,ECAgent,svpnservice,ca.crt,cert.crt} \
-               /${EC_DIR}/bin/" && \
-    bash -c "chmod +xs ${EC_DIR}/bin/{CSClient,ECAgent,svpnservice}" && \
-    extra_bins=easyconn . /tmp/build-scripts/mk-qemu-wrapper.sh && \
-    bash -c "cp easyconn/${EC_DIR}/lib64/lib{nspr4,nss3,nssutil3,plc4,plds4,smime3}.so \
-               /${EC_DIR}/lib64/" && \
-    cp easyconn/${EC_DIR}/shell/* \
-               /${EC_DIR}/shell/ && \
-    chmod +x ${EC_DIR}/shell/* && \
-    ln -s ${EC_DIR}/bin/easyconn /usr/local/bin/ && \
-    cp -r easyconn/${EC_DIR}/conf ${EC_DIR}/conf_7.6.8 && rm -r * && echo "EC_CLI" > /etc/vpn-type
-
-ARG EC_763_URL="http://download.sangfor.com.cn/download/product/sslvpn/pkg/linux_01/EasyConnect_x64.deb"
-ARG EC_767_URL="http://download.sangfor.com.cn/download/product/sslvpn/pkg/linux_767/EasyConnect_x64_7_6_7_3.deb"
-
-RUN cd /tmp && \
-    for ver in 7.6.3 7.6.7 ; do { \
-        vername=EC_$( echo "$ver" | sed 's/\.//g' )_URL && \
-        url="$(eval printf %s \"\$$vername\")" && \
-        if [ -n "${url}" ]; then wget "${url}" -O EasyConnect.deb && dpkg -x EasyConnect.deb ec && \
-        cp -r ec/usr/share/sangfor/EasyConnect/resources/conf \
-                /usr/share/sangfor/EasyConnect/resources/conf_$ver && \
-        rm -r *; fi ;} || exit 1 ; done
+RUN set -eux; \
+    ec_dir=/usr/share/sangfor/EasyConnect/resources; \
+    chmod +xs "${ec_dir}/bin/CSClient" "${ec_dir}/bin/ECAgent" "${ec_dir}/bin/svpnservice"; \
+    extra_bins=easyconn . /tmp/build-scripts/mk-qemu-wrapper.sh; \
+    ln -s "${ec_dir}/bin/easyconn" /usr/local/bin/; \
+    echo "EC_CLI" > /etc/vpn-type
 
 RUN for i in /usr/share/sangfor/EasyConnect/resources/conf_*/; do \
         ln -s /root/.easyconn $i/.easyconn ; \
     done && touch /root/.easyconn
 
 COPY ./docker-root /
-
-COPY --from=hagb/docker-easyconnect:build /results/fake-hwaddr/ /results/tinyproxy-ws/ /
 
 ENV PING_INTERVAL=1800
 
