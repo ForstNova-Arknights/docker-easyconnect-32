@@ -116,13 +116,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends iptables iproute2 qemu-user-static
 
-      - name: Build a patched native qemu-arm (outer emulator for the runner)
-        run: sudo ./qemu-user/build.sh amd64 arm
+      # Two patched emulators are needed here: qemu-arm is the outer emulator
+      # that runs the armhf binary on an x86-64 runner (the distribution's own
+      # qemu-arm has the same unpatched do_getsockopt() and would mask the fix),
+      # and qemu-x86_64 drives case 2.  Both share one build tree, so the QEMU
+      # tarball is only downloaded once.
+      - name: Build patched native emulators
+        run: |
+          sudo ./qemu-user/build.sh amd64 arm
+          sudo ./qemu-user/build.sh amd64 x86_64
 
       - name: Run the verification
         run: |
           mkdir -p /tmp/native
           cp qemu-user/qemu-arm-amd64 /tmp/native/qemu-arm
+          cp qemu-user/qemu-x86_64-amd64 /tmp/native/qemu-x86_64
           sudo env NATIVE_DIR=/tmp/native ARMHF_QEMU="$PWD/$EMULATOR" \
                ./qemu-user/test/run_verify.sh
 
