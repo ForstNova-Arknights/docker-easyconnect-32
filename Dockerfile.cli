@@ -34,6 +34,13 @@
 # Used by the hwaddr stage below, which must select its platform from it.
 ARG EC_HOST=amd64
 
+# Debian suite the image is based on.  It has to be an argument because the
+# official Debian images do not cover every architecture: bookworm only
+# publishes amd64, arm32v7, arm64v8, i386 and ppc64le, so armel (arm32v5),
+# riscv64 and s390x have to use trixie.  The emulator is built static, so the
+# suite only affects the packages inside the image.
+ARG BASE_SUITE=bookworm
+
 # Declared before the first FROM so every stage can share them.  Plain http on
 # purpose: debian:bookworm-slim carries no CA certificates yet, so an https apt
 # source cannot be verified until ca-certificates is installed.
@@ -173,7 +180,7 @@ RUN cd /src/fake-hwaddr && make clean all && \
 # Unlike fake-hwaddr.so this one runs natively in the image, so it is built for
 # the target architecture (under emulation).
 # =============================================================================
-FROM debian:bookworm-slim AS tinyproxy
+FROM debian:${BASE_SUITE}-slim AS tinyproxy
 
 # https://github.com/tinyproxy/tinyproxy/pull/211#issue-382736027
 ARG TINYPROXY_COMMIT=991e47d8ebd4b12710828b2b486535e4c25ba26c
@@ -181,7 +188,7 @@ ARG MIRROR_URL
 ARG SECURITY_URL
 
 RUN rm -f /etc/apt/sources.list && rm -rf /etc/apt/sources.list.d/* && \
-    printf 'deb %s bookworm main\ndeb %s bookworm-updates main\ndeb %s bookworm-security main\n' \
+    printf 'deb %s ${BASE_SUITE} main\ndeb %s ${BASE_SUITE}-updates main\ndeb %s ${BASE_SUITE}-security main\n' \
         "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends --no-install-suggests \
@@ -201,7 +208,7 @@ RUN set -eux; \
 # =============================================================================
 # The image itself.
 # =============================================================================
-FROM debian:bookworm-slim
+FROM debian:${BASE_SUITE}-slim
 
 ARG BUILD_ENV=local \
     MIRROR_URL \
@@ -226,7 +233,7 @@ COPY --from=tinyproxy /out/ /
 
 RUN set -eux; \
     . /tmp/build-scripts/get-echost-names.sh; \
-    printf 'deb %s bookworm main\ndeb %s bookworm-updates main\ndeb %s bookworm-security main\n' \
+    printf 'deb %s ${BASE_SUITE} main\ndeb %s ${BASE_SUITE}-updates main\ndeb %s ${BASE_SUITE}-security main\n' \
         "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list; \
     rm -f /etc/apt/sources.list.d/*; \
     if is_echost_foreign; then dpkg --add-architecture "${EC_HOST}"; fi; \

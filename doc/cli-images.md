@@ -13,21 +13,33 @@
 
 ## 支持哪些架构
 
-| 镜像架构 | Docker platform | EasyConnect 二进制 | 需要模拟器 |
-|---|---|---|---|
-| amd64 | `linux/amd64` | amd64（原生） | 不需要 |
-| i386 | `linux/386` | amd64 | `qemu-x86_64-i386` |
-| arm64 | `linux/arm64` | amd64 | `qemu-x86_64-arm64` |
-| armhf | `linux/arm/v7` | amd64 | `qemu-x86_64-armhf` |
-| armel | `linux/arm/v6` | amd64 | `qemu-x86_64-armel` |
-| ppc64le | `linux/ppc64le` | amd64 | `qemu-x86_64-ppc64el` |
-| riscv64 | `linux/riscv64` | amd64 | `qemu-x86_64-riscv64` |
-| s390x | `linux/s390x` | amd64 | `qemu-x86_64-s390x` |
-| mips64le | `linux/mips64le` | amd64 | `qemu-x86_64-mips64el` |
+| 镜像架构 | Docker platform | 基础镜像 | EasyConnect 二进制 | 需要的模拟器 |
+|---|---|---|---|---|
+| amd64 | `linux/amd64` | bookworm | amd64（原生） | 不需要 |
+| i386 | `linux/386` | bookworm | amd64 | `qemu-x86_64-i386` |
+| arm64 | `linux/arm64` | bookworm | amd64 | `qemu-x86_64-arm64` |
+| armhf | `linux/arm/v7` | bookworm | amd64 | `qemu-x86_64-armhf` |
+| armel | `linux/arm/v5` | trixie | amd64 | `qemu-x86_64-armel` |
+| ppc64le | `linux/ppc64le` | bookworm | amd64 | `qemu-x86_64-ppc64el` |
+| riscv64 | `linux/riscv64` | trixie | amd64 | `qemu-x86_64-riscv64` |
+| s390x | `linux/s390x` | trixie | amd64 | `qemu-x86_64-s390x` |
+
+基础镜像用 `BASE_SUITE` 选择，默认 `bookworm`。Debian 官方镜像并没有覆盖所有
+架构——`debian:bookworm-slim` 只发布 `amd64, arm32v7, arm64v8, i386, ppc64le`
+（见 [official-images 的 library/debian](https://github.com/docker-library/official-images/blob/master/library/debian)），
+所以 armel（`arm32v5`）、riscv64、s390x 只能用 `trixie`。模拟器是静态编译的，
+因此基础镜像的版本只影响镜像里的软件包。
+
+**mips64el 不在支持之列**：Debian 官方镜像的**任何** tag 都没有发布
+`linux/mips64le`，没有基础镜像就无从构建。（QEMU 9.2 本身是支持 mips64 作为宿主
+的，`qemu-user/build.sh mips64el x86_64` 在别的构建环境里仍然可用。）
 
 `Dockerfile.cli` 自己从 buildx 自动提供的 `TARGETARCH` / `TARGETVARIANT` 推导
 镜像架构，不需要手工传参，也就不会和 `--platform` 不一致；推导出的架构等于
 `EC_HOST`（即 amd64）时它什么都不装，二进制直接原生运行。
+
+注意 armel 是 `linux/arm/v5` 而不是 `v6`——Debian 的 armel 就是 armv5 软浮点，
+官方镜像发布的是 `arm32v5`。
 
 ## 为什么不能直接用 `apt install qemu-user`
 
@@ -221,11 +233,23 @@ sudo env NATIVE_DIR=/tmp/native ./qemu-user/test/run_verify.sh
 [`.github/workflows/build-cli-images.yml`](../.github/workflows/build-cli-images.yml)
 包含四个 job：
 
-* **emulator** —— 矩阵交叉编译每个架构的模拟器。默认使用仓库里已提交的二进制；
+* **emulator** —— 矩阵构建每个架构的模拟器。默认使用仓库里已提交的二进制；
   勾选 `rebuild_emulator` 或推送 `v*` tag 时从头编译，产物作为 artifact 上传，
-  tag 构建时还会附到 GitHub Release。这一步跑在 **Debian** 容器里，因为 Ubuntu
-  已经放弃 armel 和 mips64el，且把其余非 x86 架构放在单独的 ports 归档里，而
-  Debian 用一个归档提供所有架构。
+  tag 构建时还会附到 GitHub Release。
+
+  每个模拟器都在**它自己架构的容器里原生构建**，而不是交叉编译。交叉编译看着更
+  省事，但在这里不可行：它需要构建根里有目标架构的 libc 和 glib，而 amd64 构建根
+  里的软件包带安全更新，armel/s390x/mips64el 却没有对应的更新版本——Debian 的
+  `bookworm-security` 归档只包含 `amd64, arm64, armhf, i386, ppc64el`。`Multi-Arch:
+  same` 的包必须版本一致，于是外来架构的 libc 直接不可安装：
+
+  ```
+  libssl3:s390x : Depends: libssl3 ... but it is not going to be installed
+  ```
+
+  原生构建没有需要协调的外来软件包，问题自然消失；产物是静态的，构建容器用哪个
+  发行版也无所谓。riscv64 用 trixie，因为它在 bookworm 之后才成为 Debian 的正式
+  发布架构。
 * **verify** —— 编译一个打过补丁的本机 `qemu-arm` / `qemu-x86_64` 作为外层模拟器，
   然后运行上面那张表的四个用例，断言不通过就让流水线失败；
 * **image** —— 矩阵构建每个架构的镜像并推送到 GHCR（`:<tag>-<host>` 形式），

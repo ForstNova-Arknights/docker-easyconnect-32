@@ -65,14 +65,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { host: i386,     platform: linux/386,      suite: bookworm }
-          - { host: arm64,    platform: linux/arm64,    suite: bookworm }
-          - { host: armhf,    platform: linux/arm/v7,   suite: bookworm }
-          - { host: armel,    platform: linux/arm/v6,   suite: bookworm }
-          - { host: ppc64el,  platform: linux/ppc64le,  suite: bookworm }
-          - { host: riscv64,  platform: linux/riscv64,  suite: trixie }
-          - { host: s390x,    platform: linux/s390x,    suite: bookworm }
-          - { host: mips64el, platform: linux/mips64le, suite: bookworm }
+          - { host: i386,    platform: linux/386,     suite: bookworm }
+          - { host: arm64,   platform: linux/arm64,   suite: bookworm }
+          - { host: armhf,   platform: linux/arm/v7,  suite: bookworm }
+          - { host: armel,   platform: linux/arm/v5,  suite: trixie }
+          - { host: ppc64el, platform: linux/ppc64le, suite: bookworm }
+          - { host: riscv64, platform: linux/riscv64, suite: trixie }
+          - { host: s390x,   platform: linux/s390x,   suite: trixie }
     steps:
       - uses: actions/checkout@v4
 
@@ -177,15 +176,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { host: amd64,    platform: linux/amd64,   native: true }
-          - { host: i386,     platform: linux/386 }
-          - { host: arm64,    platform: linux/arm64 }
-          - { host: armhf,    platform: linux/arm/v7 }
-          - { host: armel,    platform: linux/arm/v6 }
-          - { host: ppc64el,  platform: linux/ppc64le }
-          - { host: riscv64,  platform: linux/riscv64 }
-          - { host: s390x,    platform: linux/s390x }
-          - { host: mips64el, platform: linux/mips64le }
+          - { host: amd64,   platform: linux/amd64,   suite: bookworm, native: true }
+          - { host: i386,    platform: linux/386,     suite: bookworm }
+          - { host: arm64,   platform: linux/arm64,   suite: bookworm }
+          - { host: armhf,   platform: linux/arm/v7,  suite: bookworm }
+          - { host: armel,   platform: linux/arm/v5,  suite: trixie }
+          - { host: ppc64el, platform: linux/ppc64le, suite: bookworm }
+          - { host: riscv64, platform: linux/riscv64, suite: trixie }
+          - { host: s390x,   platform: linux/s390x,   suite: trixie }
     steps:
       - uses: actions/checkout@v4
 
@@ -234,6 +232,8 @@ jobs:
           context: .
           file: Dockerfile.cli
           platforms: ${{ matrix.platform }}
+          build-args: |
+            BASE_SUITE=${{ matrix.suite }}
           push: ${{ github.event_name != 'pull_request' && github.event.inputs.push != 'false' }}
           load: ${{ github.event_name == 'pull_request' || github.event.inputs.push == 'false' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -279,7 +279,7 @@ jobs:
         run: |
           set -eux
           sources=
-          for host in amd64 i386 arm64 armhf armel ppc64el riscv64 s390x mips64el; do
+          for host in amd64 i386 arm64 armhf armel ppc64el riscv64 s390x; do
             sources="$sources $IMAGE:cli-$host"
           done
           # shellcheck disable=SC2086

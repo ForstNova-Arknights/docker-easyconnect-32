@@ -13,7 +13,7 @@
 ## 多架构 CLI 镜像（含 32 位平台）
 
 本分支为**每个架构**都构建一份纯命令行版（`cli`）镜像：`amd64`、`i386`、`arm64`、
-`armhf`、`armel`、`ppc64le`、`riscv64`、`s390x`、`mips64le`。
+`armhf`、`armel`（`linux/arm/v5`）、`ppc64le`、`riscv64`、`s390x`。
 
 上游的 `cli` 镜像只在 amd64 下构建。原因是 CLI 的二进制来自
 [shmilee 的命令行版 deb 包](https://github.com/shmilee/scripts/releases/download/v0.0.1/easyconn_7.6.8.2-ubuntu_amd64.deb)，

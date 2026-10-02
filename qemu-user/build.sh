@@ -146,7 +146,14 @@ echo "== building =="
 ninja -j"$(nproc 2>/dev/null || echo 2)"
 
 echo "== stripping =="
-"${CROSS}strip" -o "$OUT" "qemu-${TARGET_ARCH}"
+# A native build has no cross toolchain; on some architectures the
+# prefixed strip exists anyway (Debian ships i686-linux-gnu-strip on i386),
+# on others it does not (armel has no arm-linux-gnueabi-strip).
+if command -v "${CROSS}strip" >/dev/null 2>&1; then
+    "${CROSS}strip" -o "$OUT" "qemu-${TARGET_ARCH}"
+else
+    strip -o "$OUT" "qemu-${TARGET_ARCH}"
+fi
 
 echo
 echo "== done: $OUT =="
