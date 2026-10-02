@@ -10,6 +10,28 @@
 
 详细用法见于 [doc/usage.md](doc/usage.md)，常见问题见于 [doc/faq.md](doc/faq.md)，自行构建可参照构建说明 [doc/build.md](doc/build.md)。
 
+## 32 位（armhf）平台
+
+本分支额外支持在 **32 位 ARM（armhf / `linux/arm/v7`）** 上构建纯命令行版镜像。
+
+上游依赖发行版 `qemu-user` 来模拟 amd64 的 EasyConnect 二进制，这条路在 armhf
+上已经走不通：QEMU 自 10.0 起禁止 32 位宿主模拟 64 位 guest（11.x 更是移除了
+32 位宿主），Debian trixie 的 armhf `qemu-user` 也不再提供 `qemu-x86_64`。
+因此本分支改为交叉编译一个**打过补丁**的静态 `qemu-x86_64` 打进镜像，使其能够
+正确转发 `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)`——上游 QEMU 会把这个
+选项直接以 `-ENOPROTOOPT` 拒绝，从而破坏 EasyConnect 的透明代理场景。
+
+```bash
+cd local-deps && ./fetch.sh && cd ..          # 抓取 EasyConnect 的 deb 包
+docker buildx build --platform linux/arm/v7 \
+    -f Dockerfile.cli-armhf -t docker-easyconnect:cli-armhf .
+```
+
+编译好的 armhf 二进制已随仓库提供（`qemu-armhf/qemu-x86_64`），无需自行编译
+QEMU；若要自己编译，见 [`qemu-armhf/build.sh`](qemu-armhf/build.sh)。
+
+详见 [doc/armhf.md](doc/armhf.md)。
+
 ## 简明使用步骤
 
 使用下述方式登录后，可以通过 `127.0.0.1:1080`、`127.0.0.1:8888` 分别访问 [socks5 和 http 代理](doc/usage.md#代理服务)。

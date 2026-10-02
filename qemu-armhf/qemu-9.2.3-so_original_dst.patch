@@ -1,0 +1,102 @@
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -2548,6 +2548,79 @@
+     return ret;
+ }
+ 
++/*
++ * The netfilter "original destination" socket options are implemented by
++ * the kernel but are not exposed by the C library headers; their values are
++ * part of the kernel ABI and are identical on every Linux architecture.
++ */
++#ifndef SO_ORIGINAL_DST
++#define SO_ORIGINAL_DST 80
++#endif
++#ifndef IP6T_SO_ORIGINAL_DST
++#define IP6T_SO_ORIGINAL_DST 80
++#endif
++
++/*
++ * getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...) - and its IPv6 counterpart
++ * IP6T_SO_ORIGINAL_DST - report the destination address a connection had
++ * before netfilter redirected it (iptables REDIRECT/DNAT).  Transparent
++ * proxies such as Sangfor EasyConnect use it to find out where a redirected
++ * connection was originally headed.
++ *
++ * These options return a struct sockaddr_in / struct sockaddr_in6 rather
++ * than an int, so the generic "options with an int argument" path below
++ * cannot be used for them; and because they are absent from every
++ * per-level option list handled below, an emulated process would otherwise
++ * only ever get -ENOPROTOOPT back.
++ */
++static abi_long do_getsockopt_original_dst(int sockfd, int level, int optname,
++                                           abi_ulong optval_addr,
++                                           abi_ulong optlen)
++{
++    struct sockaddr_storage ss;
++    socklen_t sslen;
++    int len;
++    abi_long ret;
++
++    if (get_user_u32(len, optlen)) {
++        return -TARGET_EFAULT;
++    }
++    if (len < 0) {
++        return -TARGET_EINVAL;
++    }
++
++    /*
++     * *optlen is the size of the caller's buffer, so pass it on as the
++     * capacity.  This preserves the kernel's own length checks, in
++     * particular -EINVAL for a buffer that is too small.
++     */
++    if ((size_t)len > sizeof(ss)) {
++        sslen = sizeof(ss);
++    } else {
++        sslen = len;
++    }
++    memset(&ss, 0, sizeof(ss));
++    ret = get_errno(getsockopt(sockfd, level, optname, &ss, &sslen));
++    if (ret < 0) {
++        return ret;
++    }
++
++    if (sslen > sizeof(ss)) {
++        sslen = sizeof(ss);
++    }
++    if (sslen > (socklen_t)len) {
++        sslen = len;
++    }
++    if (host_to_target_sockaddr(optval_addr, (struct sockaddr *)&ss, sslen)) {
++        return -TARGET_EFAULT;
++    }
++    if (put_user_u32(sslen, optlen)) {
++        return -TARGET_EFAULT;
++    }
++
++    return 0;
++}
++
+ /* do_getsockopt() Must return target values and target errnos. */
+ static abi_long do_getsockopt(int sockfd, int level, int optname,
+                               abi_ulong optval_addr, abi_ulong optlen)
+@@ -2824,6 +2897,9 @@
+                     return -TARGET_EFAULT;
+             }
+             break;
++        case SO_ORIGINAL_DST:
++            return do_getsockopt_original_dst(sockfd, level, optname,
++                                              optval_addr, optlen);
+         default:
+             ret = -TARGET_ENOPROTOOPT;
+             break;
+@@ -2886,6 +2962,9 @@
+                     return -TARGET_EFAULT;
+             }
+             break;
++        case IP6T_SO_ORIGINAL_DST:
++            return do_getsockopt_original_dst(sockfd, level, optname,
++                                              optval_addr, optlen);
+         default:
+             ret = -TARGET_ENOPROTOOPT;
+             break;

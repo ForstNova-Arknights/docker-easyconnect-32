@@ -1,0 +1,11 @@
+# Sangfor's deb packages are fetched on demand (see local-deps/fetch.sh) and are
+# deliberately never committed: they are large and they are Sangfor's property.
+*.deb
+/local-deps/*
+!/local-deps/fetch.sh
+!/local-deps/README.md
+
+# Local build outputs
+/build/
+*.tar.xz
+*.tar.gz
