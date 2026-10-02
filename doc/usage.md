@@ -166,8 +166,12 @@ EasyConnect 客户端大致有以下三种版本
 
 ``` bash
 touch ~/.easyconn
-docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -v $HOME/.easyconn:/root/.easyconn -e EC_VER=7.6.7 -e EXIT=1 -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 hagb/docker-easyconnect:cli
+docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -v $HOME/.easyconn:/root/.easyconn -e EC_VER=7.6.7 -e EXIT=1 -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 ghcr.io/forstnova-arknights/docker-easyconnect-32:cli
 ```
+
+> 本分支的 `:cli` 覆盖 7 个架构，tag 见[多架构 CLI 镜像](cli-images.md)。
+> **部分设备需要加 `--privileged` 才能登录成功**，原因未明，详见
+> [README](../README.md#有些设备要用---privileged-才能登录)。
 
 ### X11 socket
 

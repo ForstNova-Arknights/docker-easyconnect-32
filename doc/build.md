@@ -46,18 +46,24 @@
 
 ### 纯命令行
 
+本分支的 `Dockerfile.cli` 已经是多架构的，不需要先构建 `Dockerfile.build` 那个辅助镜像：
+
 ``` bash
-git clone https://github.com/hagb/docker-easyconnect.git
-cd docker-easyconnect
-docker image build -f Dockerfile.build -t hagb/docker-easyconnect:build --build-arg EC_HOST=amd64 .
-docker image build --tag hagb/docker-easyconnect -f Dockerfile.cli --build-arg EC_HOST=amd64 .
+git clone https://github.com/ForstNova-Arknights/docker-easyconnect-32.git
+cd docker-easyconnect-32
+cd local-deps && ./fetch.sh && cd ..          # 抓取 EasyConnect 的 deb 包
+docker buildx build --platform linux/amd64 -f Dockerfile.cli -t docker-easyconnect:cli .
 ```
+
+把 `--platform` 换成 `linux/386`、`linux/arm64`、`linux/arm/v7`、`linux/ppc64le`、
+`linux/riscv64`、`linux/s390x` 就可以构建别的架构；各架构用的基础镜像和需要的模拟器
+见[多架构 CLI 镜像](cli-images.md)。
 
 ### 带 VNC 服务端
 
 ``` bash
-git clone https://github.com/hagb/docker-easyconnect.git
-cd docker-easyconnect
+git clone https://github.com/ForstNova-Arknights/docker-easyconnect-32.git
+cd docker-easyconnect-32
 docker image build $(cat build-args/7.6.7-amd64.txt) -f Dockerfile.build -t hagb/docker-easyconnect:build .
 docker image build $(cat build-args/7.6.7-amd64.txt) --tag hagb/docker-easyconnect -f Dockerfile .
 ```
@@ -65,8 +71,8 @@ docker image build $(cat build-args/7.6.7-amd64.txt) --tag hagb/docker-easyconne
 ### 使用 X11 socket 而无 VNC 服务端
 
 ``` bash
-git clone https://github.com/hagb/docker-easyconnect.git
-cd docker-easyconnect
+git clone https://github.com/ForstNova-Arknights/docker-easyconnect-32.git
+cd docker-easyconnect-32
 docker image build $(cat build-args/7.6.7-amd64.txt) -f Dockerfile.build -t hagb/docker-easyconnect:build .
 docker image build $(cat build-args/7.6.7-amd64.txt) --tag hagb/docker-easyconnect -f Dockerfile.vncless .
 ```
@@ -76,8 +82,8 @@ docker image build $(cat build-args/7.6.7-amd64.txt) --tag hagb/docker-easyconne
 (使用本机代理，以 aTrust 为例)
 
 ```bash
-git clone https://github.com/hagb/docker-easyconnect.git
-cd docker-easyconnect
+git clone https://github.com/ForstNova-Arknights/docker-easyconnect-32.git
+cd docker-easyconnect-32
 docker image build --network host $(cat build-args/atrust-arm64.txt) --build-arg http_proxy=${http_proxy} --build-arg https_proxy=${https_proxy} --build-arg MIRROR_URL="http://mirrors.ustc.edu.cn/debian/" -f Dockerfile.build -t hagb/docker-easyconnect:build .
 docker image build --network host $(cat build-args/atrust-arm64.txt) --build-arg http_proxy=${http_proxy} --build-arg https_proxy=${https_proxy} --build-arg CHROMIUM=1 --build-arg MIRROR_URL="http://mirrors.ustc.edu.cn/debian/" -f Dockerfile -t hagb/docker-atrust:chromium .
 ```

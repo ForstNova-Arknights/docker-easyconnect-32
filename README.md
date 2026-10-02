@@ -30,10 +30,25 @@
   `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)` 直接以 `-ENOPROTOOPT` 拒绝，
   到不了宿主内核，从而破坏 EasyConnect 的透明代理场景。
 
-因此本分支改为用 QEMU 9.2.3 源码加一个 79 行的补丁，**为每个宿主架构交叉编译一份
-静态 `qemu-x86_64`** 打进对应镜像（`qemu-user/qemu-x86_64-<架构>`，已随仓库提供）。
+因此本分支改为用 QEMU 9.2.3 源码加一个 79 行的补丁，**为每个架构各编译一份静态
+`qemu-x86_64`** 打进对应镜像（`qemu-user/qemu-x86_64-<架构>`，已随仓库提供）。补丁在
+`linux-user/` 里、与目标架构无关，所以一份补丁通吃所有宿主架构。
 
-CI 会把各架构镜像推送到 GitHub Container Registry，也可以直接拉取：
+CI 会把各架构镜像推送到 GitHub Container Registry
+（`ghcr.io/forstnova-arknights/docker-easyconnect-32`）：
+
+| tag | platform | 基础镜像 | 拉取体积 |
+|---|---|---|---|
+| `:cli` | 多架构 manifest | — | — |
+| `:cli-amd64` | `linux/amd64` | bookworm | 43 MB |
+| `:cli-i386` | `linux/386` | bookworm | 57 MB |
+| `:cli-arm64` | `linux/arm64` | bookworm | 56 MB |
+| `:cli-armhf` | `linux/arm/v7` | bookworm | 51 MB |
+| `:cli-ppc64el` | `linux/ppc64le` | bookworm | 61 MB |
+| `:cli-riscv64` | `linux/riscv64` | forky | 63 MB |
+| `:cli-s390x` | `linux/s390x` | forky | 65 MB |
+
+每次构建还会额外推一个 `:sha-<commit>-<架构>`，方便把某个提交钉住。
 
 ```bash
 docker pull ghcr.io/forstnova-arknights/docker-easyconnect-32:cli       # 多架构 manifest
@@ -58,32 +73,50 @@ docker buildx build --platform linux/arm/v7 \
 云端流水线见
 [`.github/workflows/build-cli-images.yml`](.github/workflows/build-cli-images.yml)。
 
+### 有些设备要用 `--privileged` 才能登录
+
+实测**至少 x86-64 上，部分设备不加 `--privileged` 会登录失败**（能连上，但登录不成功），
+加上 `--privileged` 就正常。触发条件还没摸清，也没能定位到具体是哪一步需要它——同一个
+镜像在不同设备上表现不一样，所以只能先记在这里：
+
+```bash
+docker run --rm --privileged --device /dev/net/tun -ti \
+    -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 \
+    -e EC_VER=7.6.7 -e CLI_OPTS="-d vpnaddress -u username -p password" \
+    ghcr.io/forstnova-arknights/docker-easyconnect-32:cli
+```
+
+如果你遇到「连得上但登录不上」，先按这个试。`--privileged` 会关掉容器的隔离，能用
+`--cap-add` 精确放权时就不要用它；但在原因查清之前，它是最省事的排查手段。
+
 详见 [doc/cli-images.md](doc/cli-images.md)。
 
 ## 简明使用步骤
 
 使用下述方式登录后，可以通过 `127.0.0.1:1080`、`127.0.0.1:8888` 分别访问 [socks5 和 http 代理](doc/usage.md#代理服务)。
 
-### 纯命令行版 EasyConnect（amd64 架构）
+### 纯命令行版 EasyConnect（amd64、i386、arm64、armhf、ppc64le、riscv64、s390x 架构）
 
 注意，纯命令行版本仅支持下列登录方式：用户名+密码、硬件特征码。
 
 1. [安装Docker并运行](https://docs.docker.com/get-docker/)；
 2.  在终端输入：
 	``` bash
-	docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 -e EC_VER=7.6.3 -e CLI_OPTS="-d vpnaddress -u username -p password" hagb/docker-easyconnect:cli
+	docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 -e EC_VER=7.6.3 -e CLI_OPTS="-d vpnaddress -u username -p password" ghcr.io/forstnova-arknights/docker-easyconnect-32:cli
 	```
+	本分支的 `:cli` 有 7 个架构；**部分设备需要加 `--privileged` 才能登录成功**，见[上面](#有些设备要用---privileged-才能登录)。
+
 	其中 `-e EC_VER=7.6.7` 表示使用 `7.6.7` 版本的 EasyConnect，请根据实际情况修改版本号（选择 `7.6.7` 或 `7.6.3`，详见 [EasyConnect 版本选择](doc/usage.md#easyconnect-版本选择)）；
 3. 根据提示输入服务器地址、登录凭据。
 
-### 图形界面版 EasyConnect（x86、amd64、arm64、mips64el 架构）
+### 图形界面版 EasyConnect（x86、amd64、arm64、mips64el 架构；镜像来自上游，本分支未构建）
 
 1. [安装Docker并运行](https://docs.docker.com/get-docker/)；
 2. 在终端输入： `docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -e PASSWORD=xxxx -e URLWIN=1 -v $HOME/.ecdata:/root -p 127.0.0.1:5901:5901 -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 hagb/docker-easyconnect:7.6.7`（末尾 EasyConnect 版本号 `7.6.7` 请根据实际情况修改；arm64 和 mips64el 架构需要加入 `-e DISABLE_PKG_VERSION_XML=1` 参数）；
 3. 使用vnc客户端连接vnc， 地址：`127.0.0.1`，端口: 5901, 密码 xxxx；
 4. 成功连上后你应该能看到 EasyConnect 的登录窗口，填写登录凭据并登录，若需要 web 登录可参看 [web 登录](doc/usage.md#web-登录)。
 
-### 图形界面版 aTrust（amd64、arm64、mips64el 架构）
+### 图形界面版 aTrust（amd64、arm64、mips64el 架构；镜像来自上游，本分支未构建）
 
 1. [安装Docker并运行](https://docs.docker.com/get-docker/)；
 2. 在终端输入： `docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -e PASSWORD=xxxx -e URLWIN=1 -v $HOME/.atrust-data:/root -p 127.0.0.1:5901:5901 -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 -p 127.0.0.1:54631:54631 --sysctl net.ipv4.conf.default.route_localnet=1 hagb/docker-atrust`；
@@ -92,6 +125,11 @@ docker buildx build --platform linux/arm/v7 \
 5. 若必须经过 web 界面登录或 web 端需要唤起 `atrust://browserstart` 详见 [#433](https://github.com/docker-easyconnect/docker-easyconnect/issues/443)，你可以使用内置 chromium 版镜像，启动命令需加上 `-e CHROMIUM=1`，详见 [构建带有chromium的VNC镜像](doc/build.md#构建带有-chromium-的-VNC-镜像)。
 
 ## 拉取
+
+### 本分支的镜像（GHCR）
+
+本分支只发布纯命令行版，tag 见[上面的表格](#多架构-cli-镜像含-32-位平台)；下面的
+图形界面版镜像来自上游，本分支没有构建。
 
 ### 从 Docker Hub 上直接获取：
 

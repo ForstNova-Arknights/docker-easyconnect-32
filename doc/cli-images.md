@@ -103,7 +103,21 @@ netfilter 重定向（`iptables -j REDIRECT` / DNAT）的连接**原本要访问
 
 ### 直接拉取已发布的镜像
 
-CI 会把每个架构的镜像推送到 GitHub Container Registry：
+CI 会把每个架构的镜像推送到 GitHub Container Registry
+（`ghcr.io/forstnova-arknights/docker-easyconnect-32`）：
+
+| tag | platform | 基础镜像 | 拉取体积 |
+|---|---|---|---|
+| `:cli` | 多架构 manifest | — | — |
+| `:cli-amd64` | `linux/amd64` | bookworm | 43 MB |
+| `:cli-i386` | `linux/386` | bookworm | 57 MB |
+| `:cli-arm64` | `linux/arm64` | bookworm | 56 MB |
+| `:cli-armhf` | `linux/arm/v7` | bookworm | 51 MB |
+| `:cli-ppc64el` | `linux/ppc64le` | bookworm | 61 MB |
+| `:cli-riscv64` | `linux/riscv64` | forky | 63 MB |
+| `:cli-s390x` | `linux/s390x` | forky | 65 MB |
+
+每次构建还会额外推一个 `:sha-<commit>-<架构>`，方便把某个提交钉住。
 
 ```bash
 # 多架构 manifest（Docker 会自动选匹配当前平台的）
@@ -136,6 +150,14 @@ docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti \
     -e EC_VER=7.6.3 -e CLI_OPTS="-d vpnaddress -u username -p password" \
     docker-easyconnect:cli-armhf
 ```
+
+### 有些设备要用 `--privileged` 才能登录
+
+实测**至少 x86-64 上，部分设备不加 `--privileged` 会登录失败**（能连上、但登录不成功），
+加上 `--privileged` 就正常。触发条件还没摸清，也没能定位到具体是哪一步需要它，所以先
+记在这里：遇到「连得上但登录不上」就先加 `--privileged` 试。它会把容器的隔离全部关掉，
+能用 `--cap-add` 精确放权时不要用它。详见
+[README 里对应的说明](../README.md#有些设备要用---privileged-才能登录)。
 
 除 amd64 外，每个架构都需要仓库里对应的
 [`qemu-user/qemu-x86_64-<架构>`](../qemu-user) 预编译二进制（已随仓库提供）。要
