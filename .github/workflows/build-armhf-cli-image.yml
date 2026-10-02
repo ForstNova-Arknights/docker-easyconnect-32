@@ -157,24 +157,8 @@ jobs:
       - name: Set up QEMU (to run linux/arm/v7 containers)
         uses: docker/setup-qemu-action@v3
 
-      # Dockerfile.cli-armhf pulls fake-hwaddr and tinyproxy-ws out of
-      # hagb/docker-easyconnect:build, so that image has to exist locally
-      # first.  The default buildx builder (the "docker" driver) resolves
-      # COPY --from against the local daemon; the "docker-container" driver
-      # that docker/setup-buildx-action sets up resolves it against the
-      # registry instead, which is why buildx is deliberately not set up here.
-      - name: Build the helper image (Dockerfile.build)
-        run: |
-          docker build \
-            --platform "$PLATFORM" \
-            --build-arg BUILD_ENV=actions \
-            --build-arg MIRROR_URL=http://deb.debian.org/debian/ \
-            --build-arg EC_HOST="$EC_HOST" \
-            -f Dockerfile.build \
-            -t hagb/docker-easyconnect:build \
-            .
-          docker image inspect hagb/docker-easyconnect:build \
-            --format 'helper image: {{.Os}}/{{.Architecture}}{{.Variant}} {{.Size}} bytes'
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push == 'true') }}
@@ -208,3 +192,5 @@ jobs:
             EC_HOST=${{ env.EC_HOST }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -14,6 +14,11 @@
 #     it no longer ships 64-bit target emulators for 32-bit hosts, so armhf has
 #     no qemu-x86_64 any more, and pulling the trixie build in would drag
 #     trixie's libc into a bookworm image.
+#   * fake-hwaddr.so and tinyproxy are built here instead of being copied out
+#     of hagb/docker-easyconnect:build, so the image builds from a clean
+#     checkout.  Upstream's Dockerfile.build needs crossbuild-essential-amd64
+#     for the first of them, which is uninstallable on armhf: the package
+#     exists but its dependency gcc-x86-64-linux-gnu is not built for armhf.
 #   * Only bookworm is used as an apt source, and the EasyConnect payloads are
 #     taken from ./local-deps (fetched once on the build host) so the emulated
 #     build does not depend on flaky downloads.
@@ -25,6 +30,15 @@
 #   docker buildx build --platform linux/arm/v7 -f Dockerfile.cli-armhf \
 #       --build-arg QEMU_HOST_ARCH=armhf --build-arg QEMU_TARGET_ARCH=x86_64 \
 #       --build-arg EC_HOST=amd64 -t docker-easyconnect:cli-armhf .
+
+# Declared before the first FROM so that the hwaddr stage below can select its
+# platform from it; every stage that needs a value re-declares it.
+#
+# Plain http on purpose: debian:bookworm-slim carries no CA certificates yet, so
+# an https apt source cannot be verified until ca-certificates is installed.
+ARG EC_HOST=amd64 \
+    MIRROR_URL=http://mirrors.aliyun.com/debian/ \
+    SECURITY_URL=http://mirrors.aliyun.com/debian-security/
 
 # =============================================================================
 # Stage "payload" -- unpack the EasyConnect deb packages.
@@ -104,6 +118,65 @@ RUN set -eux; \
     chmod 0755 "/out/qemu-${QEMU_TARGET_ARCH}"
 
 # =============================================================================
+# Stage "hwaddr" -- build fake-hwaddr.so.
+#
+# It is LD_PRELOADed into the EasyConnect binaries, which are amd64 and run
+# under the emulator, so the object must be amd64 no matter which architecture
+# the image is for.  Upstream cross-compiles it in Dockerfile.build with
+# crossbuild-essential-amd64; that package cannot be installed on armhf, so
+# build it natively on the platform EC_HOST names instead.
+# =============================================================================
+FROM --platform=linux/${EC_HOST} debian:bookworm-slim AS hwaddr
+
+ARG MIRROR_URL
+ARG SECURITY_URL
+
+RUN rm -f /etc/apt/sources.list && rm -rf /etc/apt/sources.list.d/* && \
+    printf 'deb %s bookworm main\ndeb %s bookworm-updates main\ndeb %s bookworm-security main\n' \
+        "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        build-essential ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY ./fake-hwaddr /src/fake-hwaddr/
+
+RUN cd /src/fake-hwaddr && make clean all && \
+    install -D fake-hwaddr.so /out/usr/local/lib/fake-hwaddr.so
+
+# =============================================================================
+# Stage "tinyproxy" -- the websocket-capable tinyproxy.
+#
+# Unlike fake-hwaddr.so this one runs natively in the image, so it is built for
+# the target architecture.
+# =============================================================================
+FROM debian:bookworm-slim AS tinyproxy
+
+# https://github.com/tinyproxy/tinyproxy/pull/211#issue-382736027
+ARG TINYPROXY_COMMIT=991e47d8ebd4b12710828b2b486535e4c25ba26c
+
+ARG MIRROR_URL
+ARG SECURITY_URL
+
+RUN rm -f /etc/apt/sources.list && rm -rf /etc/apt/sources.list.d/* && \
+    printf 'deb %s bookworm main\ndeb %s bookworm-updates main\ndeb %s bookworm-security main\n' \
+        "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        build-essential automake libssl-dev ca-certificates wget busybox && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    cd /tmp; \
+    wget -q "https://github.com/tinyproxy/tinyproxy/archive/${TINYPROXY_COMMIT}.zip" -O tinyproxy.zip; \
+    busybox unzip -q tinyproxy.zip; \
+    mv "tinyproxy-${TINYPROXY_COMMIT}" tinyproxy; \
+    cd tinyproxy; \
+    ./autogen.sh --prefix=/usr; \
+    make -j"$(nproc 2>/dev/null || echo 2)"; \
+    install -D src/tinyproxy /out/usr/bin/tinyproxy
+
+# =============================================================================
 # The image itself.
 # =============================================================================
 FROM debian:bookworm-slim
@@ -111,9 +184,9 @@ FROM debian:bookworm-slim
 # Plain http on purpose: debian:bookworm-slim carries no CA certificates yet,
 # so an https apt source cannot be verified until ca-certificates is installed.
 ARG BUILD_ENV=local \
-    MIRROR_URL=http://mirrors.aliyun.com/debian/ \
-    SECURITY_URL=http://mirrors.aliyun.com/debian-security/ \
-    EC_HOST=amd64 \
+    MIRROR_URL \
+    SECURITY_URL \
+    EC_HOST \
     QEMU_HOST_ARCH=armhf \
     QEMU_TARGET_ARCH=x86_64 \
     http_proxy https_proxy
@@ -140,6 +213,11 @@ RUN groupadd -r socks && useradd -r -g socks socks
 # The EasyConnect payload, unpacked in the "payload" stage.
 COPY --from=payload /out/ /
 
+# fake-hwaddr.so (amd64, preloaded into the emulated binaries) and the
+# websocket-capable tinyproxy (native), replacing the upstream helper image.
+COPY --from=hwaddr /out/ /
+COPY --from=tinyproxy /out/ /
+
 RUN set -eux; \
     ec_dir=/usr/share/sangfor/EasyConnect/resources; \
     chmod +xs "${ec_dir}/bin/CSClient" "${ec_dir}/bin/ECAgent" "${ec_dir}/bin/svpnservice"; \
@@ -152,8 +230,6 @@ RUN for i in /usr/share/sangfor/EasyConnect/resources/conf_*/; do \
     done && touch /root/.easyconn
 
 COPY ./docker-root /
-
-COPY --from=hagb/docker-easyconnect:build /results/fake-hwaddr/ /results/tinyproxy-ws/ /
 
 ENV PING_INTERVAL=1800
 
