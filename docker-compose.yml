@@ -6,6 +6,11 @@ services:
           - /dev/net/tun
         cap_add: 
           - NET_ADMIN
+        # EasyConnect 会 mlock() 内存，而容器默认的 RLIMIT_MEMLOCK 只有 64 KiB，
+        # mlock 会以 ENOMEM 失败、登录失败（部分设备才触发）。放开这一项即可，
+        # 不必用 privileged。详见 README 的「部分设备需要放开 memlock」。
+        ulimits:
+          memlock: -1
         volumes:
           - $HOME/.ecdata:/root
         environment:

@@ -25,6 +25,7 @@ on:
       - '**.md'
       - 'doc/**'
       - 'LICENSE'
+      - 'docker-compose.yml'
   pull_request:
   workflow_dispatch:
     inputs:

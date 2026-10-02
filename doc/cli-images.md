@@ -151,13 +151,13 @@ docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti \
     docker-easyconnect:cli-armhf
 ```
 
-### 有些设备要用 `--privileged` 才能登录
+### 部分设备需要放开 memlock
 
-实测**至少 x86-64 上，部分设备不加 `--privileged` 会登录失败**（能连上、但登录不成功），
-加上 `--privileged` 就正常。触发条件还没摸清，也没能定位到具体是哪一步需要它，所以先
-记在这里：遇到「连得上但登录不上」就先加 `--privileged` 试。它会把容器的隔离全部关掉，
-能用 `--cap-add` 精确放权时不要用它。详见
-[README 里对应的说明](../README.md#有些设备要用---privileged-才能登录)。
+EasyConnect 客户端会 `mlock()` 内存，而容器默认的 `RLIMIT_MEMLOCK` 软硬上限只有 64 KiB，
+于是 `mlock()` 以 `ENOMEM` 失败、登录跟着失败。只有部分设备会踩到。修法不是
+`--privileged`，而是 `--ulimit memlock=-1`（或 `--cap-add IPC_LOCK`）——`--privileged`
+只是顺带给了 `CAP_IPC_LOCK`，它本身并不改 ulimit。完整说明和实测数据见
+[README](../README.md#部分设备需要放开-memlock)。
 
 除 amd64 外，每个架构都需要仓库里对应的
 [`qemu-user/qemu-x86_64-<架构>`](../qemu-user) 预编译二进制（已随仓库提供）。要

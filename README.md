@@ -73,21 +73,45 @@ docker buildx build --platform linux/arm/v7 \
 云端流水线见
 [`.github/workflows/build-cli-images.yml`](.github/workflows/build-cli-images.yml)。
 
-### 有些设备要用 `--privileged` 才能登录
+### 部分设备需要放开 memlock
 
-实测**至少 x86-64 上，部分设备不加 `--privileged` 会登录失败**（能连上，但登录不成功），
-加上 `--privileged` 就正常。触发条件还没摸清，也没能定位到具体是哪一步需要它——同一个
-镜像在不同设备上表现不一样，所以只能先记在这里：
+EasyConnect 客户端会 `mlock()` 内存（大概是让凭据、密钥不被换出到 swap）。而容器默认的
+`RLIMIT_MEMLOCK` 软硬上限都只有 **64 KiB**，`mlock()` 就会以 `ENOMEM` 失败，登录跟着
+失败。**只有部分设备会踩到**，具体哪条路径才去锁内存还没查清。
+
+`--privileged` 之所以「能修好」，是因为它顺带给了 `CAP_IPC_LOCK`（有这个能力时 `mlock`
+可以不受 `RLIMIT_MEMLOCK` 限制），而**不是**因为它动了 ulimit——实测加不加
+`--privileged`，`ulimit -a` 一模一样。既然只是这一个能力的事，用最小授权就够了：
 
 ```bash
-docker run --rm --privileged --device /dev/net/tun -ti \
+# 推荐：把锁内存的上限放开
+docker run --rm --device /dev/net/tun --cap-add NET_ADMIN --ulimit memlock=-1 -ti \
     -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 \
     -e EC_VER=7.6.7 -e CLI_OPTS="-d vpnaddress -u username -p password" \
     ghcr.io/forstnova-arknights/docker-easyconnect-32:cli
+
+# 或者只补那一个能力
+docker run --rm --device /dev/net/tun --cap-add NET_ADMIN --cap-add IPC_LOCK -ti ...
 ```
 
-如果你遇到「连得上但登录不上」，先按这个试。`--privileged` 会关掉容器的隔离，能用
-`--cap-add` 精确放权时就不要用它；但在原因查清之前，它是最省事的排查手段。
+在默认容器里实测 `mlock(4 MiB)`：
+
+| 容器参数 | 结果 |
+|---|---|
+| `--device /dev/net/tun --cap-add NET_ADMIN`（默认） | `errno=12` ENOMEM |
+| `--cap-add IPC_LOCK` | ok |
+| `--ulimit memlock=-1` | ok |
+| `--privileged` | ok |
+
+硬上限同样是 64 KiB，所以**容器内部**跑 `ulimit -l unlimited` 会被拒（`Operation not
+permitted`——抬硬上限需要 `CAP_SYS_RESOURCE`），只能从 `docker run` 传。用 compose 的话：
+
+```yaml
+ulimits:
+  memlock: -1
+```
+
+（如果你只是想先把登录跑通，`--privileged` 仍然能用，只是没必要了。）
 
 详见 [doc/cli-images.md](doc/cli-images.md)。
 
@@ -104,7 +128,7 @@ docker run --rm --privileged --device /dev/net/tun -ti \
 	``` bash
 	docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 -e EC_VER=7.6.3 -e CLI_OPTS="-d vpnaddress -u username -p password" ghcr.io/forstnova-arknights/docker-easyconnect-32:cli
 	```
-	本分支的 `:cli` 有 7 个架构；**部分设备需要加 `--privileged` 才能登录成功**，见[上面](#有些设备要用---privileged-才能登录)。
+	本分支的 `:cli` 有 7 个架构；**部分设备需要加 `--ulimit memlock=-1` 才能登录成功**，见[上面](#部分设备需要放开-memlock)。
 
 	其中 `-e EC_VER=7.6.7` 表示使用 `7.6.7` 版本的 EasyConnect，请根据实际情况修改版本号（选择 `7.6.7` 或 `7.6.3`，详见 [EasyConnect 版本选择](doc/usage.md#easyconnect-版本选择)）；
 3. 根据提示输入服务器地址、登录凭据。

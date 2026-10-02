@@ -170,8 +170,8 @@ docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -v $HOME/.easyconn
 ```
 
 > 本分支的 `:cli` 覆盖 7 个架构，tag 见[多架构 CLI 镜像](cli-images.md)。
-> **部分设备需要加 `--privileged` 才能登录成功**，原因未明，详见
-> [README](../README.md#有些设备要用---privileged-才能登录)。
+> **部分设备需要加 `--ulimit memlock=-1` 才能登录成功**（客户端要 `mlock` 内存，容器
+> 默认只允许 64 KiB），详见 [README](../README.md#部分设备需要放开-memlock)。
 
 ### X11 socket
 
