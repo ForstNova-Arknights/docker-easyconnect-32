@@ -87,7 +87,7 @@ if [ -z "${SKIP_DEPS:-}" ] && [ "$(id -u)" -eq 0 ]; then
             apt_opts="-o Dir::Etc::sourcelist=$sl -o Dir::Etc::sourceparts=/dev/null"
         fi
     fi
-    pkgs="pkg-config xz-utils curl ca-certificates python3-pip python3-venv ninja-build"
+    pkgs="pkg-config patch make xz-utils curl ca-certificates python3-pip python3-venv ninja-build"
     if [ "$NATIVE" = no ]; then
         pkgs="$pkgs gcc-$TRIPLET libc6-dev:$DEB_ARCH libglib2.0-dev:$DEB_ARCH"
     else
