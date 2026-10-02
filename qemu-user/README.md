@@ -1,15 +1,26 @@
 # `qemu-user` with `SO_ORIGINAL_DST` forwarding
 
-This directory holds the user-mode emulators used by the 32-bit builds of the
-image.  The one shipped prebuilt here is `qemu-x86_64-armhf`: a **static 32-bit
-ARM executable** that emulates an **x86-64** guest, i.e. it lets the amd64
-EasyConnect binaries run inside an armhf container.
+This directory holds the user-mode emulators used by the non-amd64 builds of
+the image: **static** executables that emulate an **x86-64** guest, so that the
+amd64 EasyConnect binaries can run inside a container of another architecture.
+The prebuilt ones committed here are
+
+| file | runs on | image platform | size | sha256 |
+|---|---|---|---|---|
+| `qemu-x86_64-i386` | i386 | `linux/386` | 5,025,800 | `81c5999a39a8` |
+| `qemu-x86_64-arm64` | arm64 | `linux/arm64` | 4,394,608 | `2c3c71feb7d1` |
+| `qemu-x86_64-armhf` | armhf | `linux/arm/v7` | 2,779,160 | `907c5f2f7eb3` |
+| `qemu-x86_64-armel` | armel | `linux/arm/v5` | 3,801,124 | `9f2b753cc3cd` |
+| `qemu-x86_64-ppc64el` | ppc64el | `linux/ppc64le` | 5,443,176 | `6c47e9e4e683` |
+| `qemu-x86_64-riscv64` | riscv64 | `linux/riscv64` | 4,051,512 | `7dfc86aea643` |
+| `qemu-x86_64-s390x` | s390x | `linux/s390x` | 4,936,544 | `bc676756819d` |
+
+amd64 needs none: the EasyConnect binaries are amd64 and run natively there.
+armel has an emulator but no image yet; see `doc/cli-images.md` for why.
 
 ```
 $ file qemu-x86_64-armhf
 qemu-x86_64-armhf: ELF 32-bit LSB executable, ARM, EABI5, statically linked, stripped
-$ ls -l qemu-x86_64-armhf
--rwxr-xr-x 1 root root 2770980 ... qemu-x86_64-armhf
 ```
 
 The patch itself lives in `linux-user/`, which is shared by every target, so
@@ -152,8 +163,10 @@ host no outer emulator is involved at all.
 ### Verified inside the built image
 
 The image ships this exact binary (sha256
-`8038657949e07c006cab531dd97aed0386f2673a0221678d9a4bb620c570b016`).  Running
-an x86-64 probe inside the armhf image shows the difference directly:
+`907c5f2f7eb32f5c81b614e53843fb00d13acfb4819a1771838ba7d6ec743a9c`).  Running
+an x86-64 probe inside the armhf image shows the difference directly (measured
+on that image; `test/run_verify.sh` re-checks the same property for the
+binaries committed here on every CI run):
 
 | image | `getsockopt(fd, SOL_IP, 80, ...)` | `getsockopt(fd, SOL_IP, 999, ...)` |
 |---|---|---|

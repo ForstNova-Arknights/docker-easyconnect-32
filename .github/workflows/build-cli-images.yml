@@ -163,6 +163,14 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Build and publish one image per architecture.
+  #
+  # The base suite is not a free choice.  The CLI image runs a SOCKS5 server
+  # through /usr/sbin/danted, and dante-server exists in bookworm but was
+  # dropped from trixie and is not built for armel in forky.  So: bookworm for
+  # amd64, i386, arm64, armhf and ppc64el; forky for riscv64 and s390x, which
+  # have no bookworm base image; and no armel image at all, because no suite
+  # that publishes an armel base image ships danted.  Its emulator is still
+  # built and committed.
   # ---------------------------------------------------------------------------
   image:
     name: Build image (${{ matrix.host }})
@@ -180,10 +188,9 @@ jobs:
           - { host: i386,    platform: linux/386,     suite: bookworm }
           - { host: arm64,   platform: linux/arm64,   suite: bookworm }
           - { host: armhf,   platform: linux/arm/v7,  suite: bookworm }
-          - { host: armel,   platform: linux/arm/v5,  suite: trixie }
           - { host: ppc64el, platform: linux/ppc64le, suite: bookworm }
-          - { host: riscv64, platform: linux/riscv64, suite: trixie }
-          - { host: s390x,   platform: linux/s390x,   suite: trixie }
+          - { host: riscv64, platform: linux/riscv64, suite: forky }
+          - { host: s390x,   platform: linux/s390x,   suite: forky }
     steps:
       - uses: actions/checkout@v4
 
@@ -286,7 +293,7 @@ jobs:
           # the owner's capitalisation.
           image="$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')"
           sources=
-          for host in amd64 i386 arm64 armhf armel ppc64el riscv64 s390x; do
+          for host in amd64 i386 arm64 armhf ppc64el riscv64 s390x; do
             sources="$sources $image:cli-$host"
           done
           # shellcheck disable=SC2086

@@ -19,16 +19,27 @@
 | i386 | `linux/386` | bookworm | amd64 | `qemu-x86_64-i386` |
 | arm64 | `linux/arm64` | bookworm | amd64 | `qemu-x86_64-arm64` |
 | armhf | `linux/arm/v7` | bookworm | amd64 | `qemu-x86_64-armhf` |
-| armel | `linux/arm/v5` | trixie | amd64 | `qemu-x86_64-armel` |
 | ppc64le | `linux/ppc64le` | bookworm | amd64 | `qemu-x86_64-ppc64el` |
-| riscv64 | `linux/riscv64` | trixie | amd64 | `qemu-x86_64-riscv64` |
-| s390x | `linux/s390x` | trixie | amd64 | `qemu-x86_64-s390x` |
+| riscv64 | `linux/riscv64` | forky | amd64 | `qemu-x86_64-riscv64` |
+| s390x | `linux/s390x` | forky | amd64 | `qemu-x86_64-s390x` |
 
 基础镜像用 `BASE_SUITE` 选择，默认 `bookworm`。Debian 官方镜像并没有覆盖所有
 架构——`debian:bookworm-slim` 只发布 `amd64, arm32v7, arm64v8, i386, ppc64le`
 （见 [official-images 的 library/debian](https://github.com/docker-library/official-images/blob/master/library/debian)），
-所以 armel（`arm32v5`）、riscv64、s390x 只能用 `trixie`。模拟器是静态编译的，
+所以 riscv64 和 s390x 只能用更新的 tag（这里是 `forky`）。模拟器是静态编译的，
 因此基础镜像的版本只影响镜像里的软件包。
+
+但基础镜像的版本也不能随便挑：CLI 镜像的 SOCKS5 代理用的是 `/usr/sbin/danted`
+（来自 `dante-server` 包）。`dante-server` 在 bookworm 里有，**trixie 已经把它删掉
+了**（[madison](https://api.ftp-master.debian.org/madison?package=dante-server) 显示
+它现在只在 forky/sid 里），forky 里则有。于是：
+
+- amd64、i386、arm64、armhf、ppc64el 用 bookworm；
+- riscv64、s390x 没有 bookworm 基础镜像，用 forky；
+- **armel 不出镜像**：有 armel 基础镜像的 tag（trixie）里没有 `danted`，有 `danted`
+  的 tag（bookworm、forky）里又没有 armel 基础镜像。armel 的模拟器仍然照常构建并
+  提交（`qemu-x86_64-armel`），只要能自备 `danted`，用
+  `--build-arg BASE_SUITE=trixie` 手动构建 `linux/arm/v5` 依旧可行。
 
 **mips64el 不在支持之列**：Debian 官方镜像的**任何** tag 都没有发布
 `linux/mips64le`，没有基础镜像就无从构建。（QEMU 9.2 本身是支持 mips64 作为宿主
@@ -38,7 +49,7 @@
 镜像架构，不需要手工传参，也就不会和 `--platform` 不一致；推导出的架构等于
 `EC_HOST`（即 amd64）时它什么都不装，二进制直接原生运行。
 
-注意 armel 是 `linux/arm/v5` 而不是 `v6`——Debian 的 armel 就是 armv5 软浮点，
+armel 的 platform 是 `linux/arm/v5` 而不是 `v6`——Debian 的 armel 就是 armv5 软浮点，
 官方镜像发布的是 `arm32v5`。
 
 ## 为什么不能直接用 `apt install qemu-user`
@@ -248,8 +259,8 @@ sudo env NATIVE_DIR=/tmp/native ./qemu-user/test/run_verify.sh
   ```
 
   原生构建没有需要协调的外来软件包，问题自然消失；产物是静态的，构建容器用哪个
-  发行版也无所谓。riscv64 用 trixie，因为它在 bookworm 之后才成为 Debian 的正式
-  发布架构。
+  发行版也无所谓，只要该发行版发布了这个架构的基础镜像：armel、riscv64、s390x 用
+  trixie（riscv64 在 bookworm 之后才成为 Debian 的正式发布架构），其余用 bookworm。
 * **verify** —— 编译一个打过补丁的本机 `qemu-arm` / `qemu-x86_64` 作为外层模拟器，
   然后运行上面那张表的四个用例，断言不通过就让流水线失败；
 * **image** —— 矩阵构建每个架构的镜像并推送到 GHCR（`:<tag>-<host>` 形式），
