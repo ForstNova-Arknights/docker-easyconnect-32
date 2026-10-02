@@ -126,6 +126,7 @@ RUN set -eux; \
         arm64/)   host=arm64   ;; \
         arm/v7)   host=armhf   ;; \
         arm/v6)   host=armel   ;; \
+        arm/v5)   host=armel   ;; \
         arm/)     host=armhf   ;; \
         ppc64le/) host=ppc64el ;; \
         riscv64/) host=riscv64 ;; \
