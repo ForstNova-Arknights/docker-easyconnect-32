@@ -292,4 +292,6 @@ sudo env NATIVE_DIR=/tmp/native ./qemu-user/test/run_verify.sh
 * **manifest** —— 用 `docker buildx imagetools create` 把各架构镜像合成
   `:cli` 多架构 manifest。
 
-PR 与 `push: false` 的手动触发只构建、不推送。
+PR 与 `push: false` 的手动触发只构建、不推送（此时镜像会 `--load` 进本地 daemon，
+好让冒烟测试有东西可跑）。只改文档的推送不会触发重建，`push` 的 `paths-ignore` 把
+`**.md`、`doc/**` 和 `LICENSE` 排除在外；打 tag 时路径过滤不生效，所以发版一定会跑。
