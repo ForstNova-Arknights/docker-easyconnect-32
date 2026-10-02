@@ -119,9 +119,16 @@ docker.io/hagb/docker-easyconnect:build: not found
 ```
 
 自己构建它也走不通：上游的 `Dockerfile.build` 在 `EC_HOST=amd64` 时会安装
-`crossbuild-essential-amd64`，而 Debian **没有为 armhf 构建
-`gcc-x86-64-linux-gnu`**，该包因此不可安装。上游 CI 的 `archs` 列表里也没有
-armhf（只有 mips64le/arm64/i386/amd64），armhf 的 `build` tag 是手工推上去的。
+`crossbuild-essential-amd64`。该包在 armhf 的 trixie/bullseye 索引里**存在**，
+但它依赖的交叉编译器 `gcc-x86-64-linux-gnu` **没有为 armhf 构建**，于是整个
+依赖链不可安装。
+
+上游自己的流水线也从不需要这个 tag 是公开的：它在本地
+`docker buildx build -t hagb/docker-easyconnect:build -f Dockerfile.build .`
+构建，所有下游镜像构建完之后 `docker image rm` 掉，push 步骤里没有它——所以它
+是一个**纯本地中间 tag**。而且上游 CI 的 `archs` 只有
+`mips64le arm64 i386 amd64`，`Dockerfile.cli` 更是**只在 amd64 下构建**，armhf
+的 cli 镜像上游没有任何产物。
 
 所以本分支直接在 `Dockerfile.cli-armhf` 里构建这两个产物：
 
