@@ -11,7 +11,9 @@ cd "$(dirname "$0")"
 # The upstream URL is
 #   https://github.com/shmilee/scripts/releases/download/v0.0.1/easyconn_7.6.8.2-ubuntu_amd64.deb
 # The gh-proxy.com prefix is only a mirror for networks where github.com is slow.
-GH_PROXY=${GH_PROXY:-https://gh-proxy.com/}
+# Set GH_PROXY to the empty string to download straight from github.com
+# (no colon in the expansion, so an empty value really means "no proxy").
+GH_PROXY=${GH_PROXY-https://gh-proxy.com/}
 
 fetch() {
     url=$1

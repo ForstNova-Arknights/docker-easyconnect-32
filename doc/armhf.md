@@ -5,7 +5,7 @@
 
 上游的 `Dockerfile.cli` 依赖发行版的 `qemu-user` 包在 armhf 上模拟 amd64 的
 EasyConnect 二进制，这条路现在已经走不通了（原因见下）。本分支改为**自行交叉
-编译一个打过补丁的 `qemu-x86_64`**，并把它打进镜像。
+编译一个打过补丁的 `qemu-user`**，并把它打进镜像。
 
 ## 为什么不能直接用 `apt install qemu-user`
 
@@ -44,7 +44,8 @@ netfilter 重定向（`iptables -j REDIRECT` / DNAT）的连接**原本要访问
    `SO_ORIGINAL_DST` / `IP6T_SO_ORIGINAL_DST`。
 
 补丁共新增 79 行、删除 0 行，见
-[`qemu-armhf/qemu-9.2.3-so_original_dst.patch`](../qemu-armhf/qemu-9.2.3-so_original_dst.patch)。
+[`qemu-user/qemu-9.2.3-so_original_dst.patch`](../qemu-user/qemu-9.2.3-so_original_dst.patch)。
+它位于 `linux-user/` 这一与目标架构无关的公共代码中，**不局限于 armhf**。
 
 > 已知未处理的缺口：`do_setsockopt()` 有同样风格的白名单，不认识
 > `IP_TRANSPARENT`(19)，guest 无法**设置**该选项。EasyConnect 需要的是
@@ -60,7 +61,7 @@ cd local-deps && ./fetch.sh && cd ..
 
 # 2. 构建 armhf 镜像
 docker buildx build --platform linux/arm/v7 \
-    -f Dockerfile.cli-armhf -t docker-easyconnect:cli-armhf .
+    -f Dockerfile.cli-armhf -t docker-easyconnect:cli-armhf --load .
 ```
 
 运行方式与上游 `cli` 镜像完全一致：
@@ -73,33 +74,66 @@ docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti \
 ```
 
 仓库中已经附带了编译好的静态 armhf 二进制
-[`qemu-armhf/qemu-x86_64`](../qemu-armhf/qemu-x86_64)（2.8 MB），所以上一步的
-第 2 条命令可以直接使用，无需自己编译 QEMU。
+[`qemu-user/qemu-x86_64-armhf`](../qemu-user/qemu-x86_64-armhf)（2.8 MB），所以
+上一步的第 2 条命令可以直接使用，无需自己编译 QEMU。
 
-## 自行编译 QEMU
+### 关于镜像体积
+
+EasyConnect 的三个 deb 包合计约 137 MB。构建时它们在 **`payload` 阶段**被解包，
+只有解包结果被 `COPY --from` 进最终镜像；deb 包本身不进入任何最终镜像层。
+
+这一点必须用多阶段构建实现：如果像常见写法那样 `COPY local-deps/` 之后再在后续
+`RUN` 里 `rm -rf`，deb 包所在的层仍会留在镜像里——那样会白白多出 137 MB。
+
+`payload` 阶段还固定使用 `$BUILDPLATFORM`，让 `dpkg -x` 在构建机架构上原生运行
+而不是在模拟下运行（解包 amd64 的 deb 与架构无关），构建因此快了很多。
+
+### QEMU 架构选项
+
+补丁与架构无关，所以 emulator 也可以换成别的宿主/目标组合。`Dockerfile.cli-armhf`
+暴露了三个构建参数：
+
+| 参数 | 默认值 | 含义 |
+|---|---|---|
+| `QEMU_HOST_ARCH` | `armhf` | 镜像运行的架构（Debian 命名），决定用哪个预编译二进制 |
+| `QEMU_TARGET_ARCH` | `x86_64` | 被模拟的架构（QEMU 命名），必须与 `EC_HOST` 对应 |
+| `EC_HOST` | `amd64` | EasyConnect 二进制本身的架构（Debian 命名） |
 
 ```bash
-./qemu-armhf/build.sh          # 在 x86-64 的 Debian/Ubuntu 上运行
+docker buildx build --platform linux/arm/v7 -f Dockerfile.cli-armhf \
+    --build-arg QEMU_HOST_ARCH=armhf \
+    --build-arg QEMU_TARGET_ARCH=x86_64 \
+    --build-arg EC_HOST=amd64 \
+    -t docker-easyconnect:cli-armhf --load .
 ```
 
-脚本会装依赖、下载 QEMU 9.2.3、打补丁、交叉编译并 strip，最终产出
-`qemu-armhf/qemu-x86_64`。细节（依赖列表、configure 参数、注意事项）见
-[`qemu-armhf/README.md`](../qemu-armhf/README.md)。
+换成别的组合时，需要先用 [`qemu-user/build.sh`](../qemu-user/build.sh) 生成对应
+的 `qemu-user/qemu-<TARGET_ARCH>-<HOST_ARCH>`：
+
+```bash
+./qemu-user/build.sh                # armhf  -> x86_64（默认）
+./qemu-user/build.sh arm64 x86_64   # arm64  -> x86_64
+./qemu-user/build.sh amd64 x86_64   # 本机 x86-64 原生构建
+```
+
+细节（依赖列表、configure 参数、注意事项）见
+[`qemu-user/README.md`](../qemu-user/README.md)。
 
 ## 验证
 
-`qemu-armhf/test/run_verify.sh` 会在**各自独立的 network namespace** 中跑四个
+`qemu-user/test/run_verify.sh` 会在**各自独立的 network namespace** 中跑四个
 用例（不会改动宿主机网络）：先加一条
 `iptables -t nat -A OUTPUT -p tcp -d 127.0.0.1 --dport 18081 -j REDIRECT --to-ports 18080`，
 再让测试程序连接 `127.0.0.1:18081`（被重定向到它自己的 `:18080` 监听），最后打印
-`SO_ORIGINAL_DST` 报告出来的地址——正确时应为**重定向前的 18081**。
+`SO_ORIGINAL_DST` 报告出来的地址——正确时应为**重定向前的 18081**。脚本对每个
+用例断言预期结果，任一不符就以非 0 退出。
 
-| # | 运行方式 | `SO_ORIGINAL_DST` | 结果 |
+| # | 运行方式 | `SO_ORIGINAL_DST` | 预期 |
 |---|---|---|---|
 | 1 | 原生 x86_64（基准） | `127.0.0.1:18081` | PASS |
 | 2 | 打过补丁的 `qemu-x86_64`（x86-64 宿主） | `127.0.0.1:18081` | PASS |
-| 3 | **本仓库的 armhf `qemu-x86_64`**，外层用打过补丁的 `qemu-arm` | `127.0.0.1:18081` | PASS |
-| 4 | 本仓库的 armhf `qemu-x86_64`，外层用发行版未打补丁的 `qemu-arm`（对照） | `errno=92` ENOPROTOOPT | FAIL |
+| 3 | **本仓库的 armhf `qemu-x86_64-armhf`**，外层用打过补丁的 `qemu-arm` | `127.0.0.1:18081` | PASS |
+| 4 | 本仓库的 armhf `qemu-x86_64-armhf`，外层用发行版未打补丁的 `qemu-arm`（对照） | `errno=92` ENOPROTOOPT | FAIL |
 
 镜像内的对比同样能看出差别（`optname 999` 是故意传入的非法选项）：
 
@@ -118,3 +152,30 @@ armhf 的模拟器在 x86-64 宿主上必须再套一层 `qemu-arm` 才能执行
 `-ENOPROTOOPT`，把修复完全掩盖掉（即上表用例 4）。因此用例 2、3 使用的是用
 同一份补丁源码编译出来的 `qemu-arm`；在真实的 armhf 机器上不存在外层模拟器，
 也就没有这个问题。
+
+```bash
+sudo ./qemu-user/build.sh amd64 arm            # 编译打过补丁的本机 qemu-arm
+mkdir -p /tmp/native && cp qemu-user/qemu-arm-amd64 /tmp/native/qemu-arm
+sudo env NATIVE_DIR=/tmp/native ./qemu-user/test/run_verify.sh
+```
+
+## 持续集成
+
+[`.github/workflows/build-armhf-cli-image.yml`](../.github/workflows/build-armhf-cli-image.yml)
+包含三个 job：
+
+* **emulator** —— 在云端交叉编译 emulator（`workflow_dispatch` 勾选
+  `rebuild_emulator`，或推送 `v*` tag 时触发），产物作为 artifact 上传，
+  并在 tag 构建时附到 GitHub Release；
+* **verify** —— 编译一个打过补丁的本机 `qemu-arm` 作为外层模拟器，然后运行
+  上面那张表的四个用例，断言不通过就让流水线失败；
+* **image** —— 拉取 EasyConnect 包、构建 `linux/arm/v7` 镜像并推送到
+  GitHub Container Registry：
+
+  ```
+  ghcr.io/<owner>/docker-easyconnect-32:cli-armhf
+  ghcr.io/<owner>/docker-easyconnect-32:master
+  ghcr.io/<owner>/docker-easyconnect-32:sha-<commit>
+  ```
+
+  PR 与 `push: false` 的手动触发只构建、不推送。

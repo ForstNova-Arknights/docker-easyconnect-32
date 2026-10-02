@@ -7,5 +7,10 @@
 
 # Local build outputs
 /build/
+qemu-user/build/
 *.tar.xz
 *.tar.gz
+
+# Native test emulators; only the cross-built ones are shipped
+qemu-user/qemu-arm-amd64
+qemu-user/qemu-x86_64-amd64

@@ -27,8 +27,9 @@ docker buildx build --platform linux/arm/v7 \
     -f Dockerfile.cli-armhf -t docker-easyconnect:cli-armhf .
 ```
 
-编译好的 armhf 二进制已随仓库提供（`qemu-armhf/qemu-x86_64`），无需自行编译
-QEMU；若要自己编译，见 [`qemu-armhf/build.sh`](qemu-armhf/build.sh)。
+编译好的 armhf 二进制已随仓库提供（`qemu-user/qemu-x86_64-armhf`），无需自行编译
+QEMU；若要自己编译，或想换成别的宿主/目标架构组合，见
+[`qemu-user/build.sh`](qemu-user/build.sh)（`./build.sh [HOST_ARCH] [TARGET_ARCH]`）。
 
 详见 [doc/armhf.md](doc/armhf.md)。
 
