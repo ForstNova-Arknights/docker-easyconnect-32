@@ -187,12 +187,19 @@ ARG TINYPROXY_COMMIT=991e47d8ebd4b12710828b2b486535e4c25ba26c
 ARG MIRROR_URL
 ARG SECURITY_URL
 
-RUN rm -f /etc/apt/sources.list && rm -rf /etc/apt/sources.list.d/* && \
-    printf 'deb %s ${BASE_SUITE} main\ndeb %s ${BASE_SUITE}-updates main\ndeb %s ${BASE_SUITE}-security main\n' \
-        "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list && \
-    apt-get update && \
+# The suite comes from the base image rather than from a second build argument:
+# an ARG declared before the first FROM reaches FROM lines only, and duplicating
+# its default here would be one more thing to keep in sync.
+RUN set -eux; \
+    . /etc/os-release; \
+    rm -f /etc/apt/sources.list; rm -rf /etc/apt/sources.list.d/*; \
+    printf 'deb %s %s main\ndeb %s %s-updates main\ndeb %s %s-security main\n' \
+        "${MIRROR_URL}" "${VERSION_CODENAME}" \
+        "${MIRROR_URL}" "${VERSION_CODENAME}" \
+        "${SECURITY_URL}" "${VERSION_CODENAME}" > /etc/apt/sources.list; \
+    apt-get update; \
     apt-get install -y --no-install-recommends --no-install-suggests \
-        build-essential automake libssl-dev ca-certificates wget busybox && \
+        build-essential automake libssl-dev ca-certificates wget busybox; \
     rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -233,8 +240,11 @@ COPY --from=tinyproxy /out/ /
 
 RUN set -eux; \
     . /tmp/build-scripts/get-echost-names.sh; \
-    printf 'deb %s ${BASE_SUITE} main\ndeb %s ${BASE_SUITE}-updates main\ndeb %s ${BASE_SUITE}-security main\n' \
-        "${MIRROR_URL}" "${MIRROR_URL}" "${SECURITY_URL}" > /etc/apt/sources.list; \
+    . /etc/os-release; \
+    printf 'deb %s %s main\ndeb %s %s-updates main\ndeb %s %s-security main\n' \
+        "${MIRROR_URL}" "${VERSION_CODENAME}" \
+        "${MIRROR_URL}" "${VERSION_CODENAME}" \
+        "${SECURITY_URL}" "${VERSION_CODENAME}" > /etc/apt/sources.list; \
     rm -f /etc/apt/sources.list.d/*; \
     if is_echost_foreign; then dpkg --add-architecture "${EC_HOST}"; fi; \
     foreign_libs=; \
