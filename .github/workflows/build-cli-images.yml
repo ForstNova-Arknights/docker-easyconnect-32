@@ -19,6 +19,12 @@ on:
   push:
     branches: [master]
     tags: ['v*']
+    # a documentation-only change has nothing to rebuild (tag pushes ignore
+    # path filters, so a release tag always runs)
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
+      - 'LICENSE'
   pull_request:
   workflow_dispatch:
     inputs:
