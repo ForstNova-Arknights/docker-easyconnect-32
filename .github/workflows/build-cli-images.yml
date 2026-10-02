@@ -1,6 +1,6 @@
 name: Build CLI images
 
-# Cross-compiles the patched qemu-user emulators, proves that they forward
+# Builds the patched qemu-user emulators, proves that they forward
 # getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...), and publishes one CLI image per
 # architecture to GitHub Container Registry.
 #
@@ -38,31 +38,55 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Cross-compile one emulator per architecture that needs one.  Runs on demand
+  # Build one emulator per architecture that needs one.  Runs on demand
   # (workflow_dispatch with rebuild_emulator) or for tags; otherwise the
   # binaries committed under qemu-user/ are used.
   #
-  # Debian rather than Ubuntu: Ubuntu dropped armel and mips64el, and keeps the
-  # rest of these architectures in a separate ports archive, while Debian serves
-  # every architecture from one archive.  node:20-bookworm is used instead of
-  # plain debian:bookworm because actions/checkout needs git.
+  # Each build runs natively *inside a container of its own architecture* rather
+  # than cross-compiling.  Cross-compiling looked cheaper but is not portable
+  # here: it needs the target architecture's libc and glib in the build root,
+  # and the amd64 build root carries security-updated packages that have no
+  # counterpart for armel/s390x/mips64el (Debian's bookworm-security archive
+  # only carries amd64, arm64, armhf, i386 and ppc64el).  Multi-Arch: same
+  # packages must agree on the version, so the foreign libc became
+  # uninstallable.  A native build has no foreign packages to reconcile, and the
+  # result is static, so the build container's release does not matter.
+  #
+  # riscv64 is built on trixie because it only became a Debian release
+  # architecture after bookworm.
   # ---------------------------------------------------------------------------
   emulator:
-    name: Cross-compile qemu-user (${{ matrix.host }})
+    name: Build qemu-user (${{ matrix.host }})
     if: ${{ github.event.inputs.rebuild_emulator == 'true' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-22.04
-    container: node:20-bookworm
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
-        host: [i386, arm64, armhf, armel, ppc64el, riscv64, s390x, mips64el]
+        include:
+          - { host: i386,     platform: linux/386,      suite: bookworm }
+          - { host: arm64,    platform: linux/arm64,    suite: bookworm }
+          - { host: armhf,    platform: linux/arm/v7,   suite: bookworm }
+          - { host: armel,    platform: linux/arm/v6,   suite: bookworm }
+          - { host: ppc64el,  platform: linux/ppc64le,  suite: bookworm }
+          - { host: riscv64,  platform: linux/riscv64,  suite: trixie }
+          - { host: s390x,    platform: linux/s390x,    suite: bookworm }
+          - { host: mips64el, platform: linux/mips64le, suite: bookworm }
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build
-        run: ./qemu-user/build.sh "${{ matrix.host }}" "$QEMU_TARGET_ARCH"
+      - name: Set up QEMU (to run ${{ matrix.platform }} containers)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build inside a ${{ matrix.platform }} container
+        run: |
+          docker run --rm \
+            --platform "${{ matrix.platform }}" \
+            -v "$PWD:/src" -w /src \
+            -e WORK=/tmp/qemu-build \
+            "debian:${{ matrix.suite }}-slim" \
+            ./qemu-user/build.sh "${{ matrix.host }}" "$QEMU_TARGET_ARCH"
 
       - name: Report the result
         run: |
@@ -153,14 +177,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { host: amd64,   platform: linux/amd64,   native: true }
-          - { host: i386,    platform: linux/386 }
-          - { host: arm64,   platform: linux/arm64 }
-          - { host: armhf,   platform: linux/arm/v7 }
-          - { host: armel,   platform: linux/arm/v6 }
-          - { host: ppc64el, platform: linux/ppc64le }
-          - { host: riscv64, platform: linux/riscv64 }
-          - { host: s390x,   platform: linux/s390x }
+          - { host: amd64,    platform: linux/amd64,   native: true }
+          - { host: i386,     platform: linux/386 }
+          - { host: arm64,    platform: linux/arm64 }
+          - { host: armhf,    platform: linux/arm/v7 }
+          - { host: armel,    platform: linux/arm/v6 }
+          - { host: ppc64el,  platform: linux/ppc64le }
+          - { host: riscv64,  platform: linux/riscv64 }
+          - { host: s390x,    platform: linux/s390x }
           - { host: mips64el, platform: linux/mips64le }
     steps:
       - uses: actions/checkout@v4
@@ -185,7 +209,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: ${{ github.event_name != 'pull_request' && (github.event.inputs.push != 'false') }}
+        if: ${{ github.event_name != 'pull_request' && github.event.inputs.push != 'false' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
