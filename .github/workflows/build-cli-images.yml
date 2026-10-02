@@ -248,9 +248,13 @@ jobs:
       - name: Smoke test the emulator
         if: ${{ matrix.native != true }}
         run: |
+          # github.repository keeps the owner's capitalisation, and docker
+          # rejects an uppercase repository name in a reference.  The push
+          # above is unaffected because metadata-action lowercases its tags.
+          image="$(echo "$IMAGE:cli-${{ matrix.host }}" | tr '[:upper:]' '[:lower:]')"
           docker run --rm --platform "${{ matrix.platform }}" \
             --entrypoint /usr/bin/qemu-${{ env.QEMU_TARGET_ARCH }} \
-            "${{ env.IMAGE }}:cli-${{ matrix.host }}" --version
+            "$image" --version
 
   # ---------------------------------------------------------------------------
   # Combine the per-architecture images into a single :cli manifest.
@@ -278,10 +282,13 @@ jobs:
       - name: Create :cli from the per-architecture images
         run: |
           set -eux
+          # docker rejects an uppercase repository name; github.repository keeps
+          # the owner's capitalisation.
+          image="$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')"
           sources=
           for host in amd64 i386 arm64 armhf armel ppc64el riscv64 s390x; do
-            sources="$sources $IMAGE:cli-$host"
+            sources="$sources $image:cli-$host"
           done
           # shellcheck disable=SC2086
-          docker buildx imagetools create -t "$IMAGE:cli" $sources
-          docker buildx imagetools inspect "$IMAGE:cli"
+          docker buildx imagetools create -t "$image:cli" $sources
+          docker buildx imagetools inspect "$image:cli"
