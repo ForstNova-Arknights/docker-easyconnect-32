@@ -151,6 +151,30 @@ docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti \
     docker-easyconnect:cli-armhf
 ```
 
+### 环境变量（qemu 下的登录时序）
+
+用 qemu-user 模拟 x86_64 的 EasyConnect 时（armhf 等设备），ECAgent 要几秒到几十秒才能
+把 54530 上的 webserver 拉起来。这期间 easyconn 发过去的请求会超时，在
+`resources/logs/easyconn.log` 里被记成 `ECAgent is down`——那句话是**超时**的意思，实测
+有 ECAgent 正在推 rclist 时也被这么记的情况。上游的循环不等它就登录，登录失败后
+`killall` 重启，于是「越失败越杀、越杀越起不来」。
+
+镜像里的 `start-sangfor.sh` 为此加了三层保护：
+
+| 环境变量 | 默认 | 作用 |
+|---|---|---|
+| `ECAGENT_WAIT` | `180` | 跑 easyconn 之前，先等 `ECAgent.log` 出现**本轮新增**的 `webserver started`，且 54530 在监听；`0` 表示不等待 |
+| `RETRY_DELAY` | `15` | 一轮结束后的基础重试间隔（秒） |
+| `RETRY_BACKOFF_MAX` | `1800` | 上一轮没通过认证时，间隔逐次翻倍，上限这个秒数；`0` 表示不退避（固定间隔） |
+| `BRUTE_FORCE_BACKOFF` | `1800` | 本轮日志里出现服务端的暴力破解提示后，暂停这么久 |
+
+退避不是多余的：2026-10-03 实测，**23 分钟里约 20 次**失败登录就被服务端判定成暴力
+破解，此后登录强制图形验证码、CLI 无法通过（`You are trying brute-force login on this
+IP address. Word verification is enabled!`）。想完全回到上游行为：
+`RETRY_DELAY=4 RETRY_BACKOFF_MAX=0`。
+
+风控退避期间想提前重试：`docker exec <容器名> rm -f /tmp/BRUTE_LOCK`。
+
 ### 部分设备需要放开 memlock
 
 EasyConnect 客户端会 `mlock()` 内存，而容器默认的 `RLIMIT_MEMLOCK` 软硬上限只有 64 KiB，

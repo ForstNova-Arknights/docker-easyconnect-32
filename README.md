@@ -129,6 +129,9 @@ ulimits:
 	docker run --rm --device /dev/net/tun --cap-add NET_ADMIN -ti -p 127.0.0.1:1080:1080 -p 127.0.0.1:8888:8888 -e EC_VER=7.6.3 -e CLI_OPTS="-d vpnaddress -u username -p password" ghcr.io/forstnova-arknights/docker-easyconnect-32:cli
 	```
 	本分支的 `:cli` 有 7 个架构；**部分设备需要加 `--ulimit memlock=-1` 才能登录成功**，见[上面](#部分设备需要放开-memlock)。
+	在 qemu 模拟的架构（armhf 等）上，镜像会先等 ECAgent 就绪再登录、认证失败时按指数退避
+	重试，避免连续失败被服务端判成暴力破解；可用 `ECAGENT_WAIT`、`RETRY_DELAY`、
+	`RETRY_BACKOFF_MAX`、`BRUTE_FORCE_BACKOFF` 调整，详见[多架构 CLI 镜像](doc/cli-images.md#环境变量qemu-下的登录时序)。
 
 	其中 `-e EC_VER=7.6.7` 表示使用 `7.6.7` 版本的 EasyConnect，请根据实际情况修改版本号（选择 `7.6.7` 或 `7.6.3`，详见 [EasyConnect 版本选择](doc/usage.md#easyconnect-版本选择)）；
 3. 根据提示输入服务器地址、登录凭据。
